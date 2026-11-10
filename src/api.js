@@ -71,3 +71,38 @@ function api_calendar(params) {
 function api_gmail(labelId) {
   return run_(function () { return gmailUnread_(labelId); });
 }
+
+/* ---------- 書類ワークフロー（service_docflow.js） ---------- */
+/* ref は { unit: 共有タブの ID（自分のタブなら null）, widgetId }。設定はサーバーが保存済みのものを読む */
+
+function api_docflowList(ref) {
+  return run_(function () { return docflowList_(ref || {}); });
+}
+
+function api_docflowCreate(ref, templateId, subject) {
+  return run_(function () {
+    const created = docflowCreate_(ref || {}, templateId, subject);
+    return { created: created, list: docflowList_(ref || {}) };
+  });
+}
+
+function api_docflowSubmit(ref, fileId, approvers, message) {
+  return run_(function () {
+    docflowSubmit_(ref || {}, fileId, approvers, message);
+    return docflowList_(ref || {});
+  });
+}
+
+function api_docflowDecide(ref, fileId, action, comment) {
+  return run_(function () {
+    docflowDecide_(ref || {}, fileId, action, comment);
+    return docflowList_(ref || {});
+  });
+}
+
+function api_docflowWithdraw(ref, fileId) {
+  return run_(function () {
+    docflowWithdraw_(ref || {}, fileId);
+    return docflowList_(ref || {});
+  });
+}

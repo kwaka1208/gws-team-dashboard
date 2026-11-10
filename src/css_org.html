@@ -162,3 +162,53 @@
   [data-edit-mode] .tab-item__tools { display: inline-flex; }
 }
 </style>
+<style>
+@layer components {
+  /* ---------- 書類ワークフロー ---------- */
+  .docflow { display: flex; flex-direction: column; gap: var(--space-2); height: 100%; min-height: 0; }
+  .docflow__bar { display: flex; align-items: center; gap: var(--space-2); flex-wrap: wrap; font-size: var(--font-size-sm); }
+  .docflow__bar .input { width: auto; padding-block: 2px; }
+  .docflow__spacer { flex: 1; }
+  .docflow__waiting { color: var(--color-accent); }
+  .docflow-list { list-style: none; margin: 0; padding: 0; overflow: auto; min-height: 0; flex: 1; }
+  .docflow-item {
+    display: grid;
+    grid-template-columns: auto 1fr auto;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    padding: var(--space-2) 0;
+    border-top: 1px solid var(--color-border);
+  }
+  .docflow-item:first-child { border-top: 0; }
+  .docflow-item.is-waiting { background: color-mix(in srgb, var(--color-accent) 7%, transparent); }
+  .docflow-item__main { display: flex; flex-direction: column; min-width: 0; }
+  .docflow-item__name { font-weight: 600; color: var(--color-text); text-decoration: none; overflow-wrap: anywhere; }
+  .docflow-item__name:hover { text-decoration: underline; }
+  .docflow-item__meta { font-size: var(--font-size-xs); color: var(--color-text-muted); }
+  .docflow-item__actions { display: flex; gap: var(--space-1); flex-wrap: wrap; justify-content: flex-end; }
+  .docflow-status {
+    display: inline-block;
+    min-width: 4em;
+    padding: 1px 8px;
+    border-radius: 999px;
+    font-size: var(--font-size-xs);
+    font-weight: 700;
+    text-align: center;
+    white-space: nowrap;
+    border: 1px solid currentColor;
+  }
+  .docflow-status--draft { color: var(--color-text-muted); }
+  .docflow-status--submitted { color: #b26a00; }
+  .docflow-status--approved { color: var(--color-accent); }
+  .docflow-status--rejected { color: var(--color-danger); }
+  @media (max-width: 640px) {
+    .docflow-item { grid-template-columns: auto 1fr; }
+    .docflow-item__actions { grid-column: 1 / -1; justify-content: flex-start; }
+  }
+
+  /* 設定画面のテンプレートの行 */
+  .docflow-templates { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--space-2); }
+  .docflow-templates__row { display: flex; gap: var(--space-2); align-items: flex-start; padding: var(--space-2); border: 1px solid var(--color-border); border-radius: var(--radius-sm); }
+  .docflow-templates__fields { flex: 1; display: grid; gap: var(--space-1); }
+}
+</style>

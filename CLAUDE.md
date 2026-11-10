@@ -21,6 +21,8 @@ Google Apps Script（GAS）の Web アプリ。personal-dashboard（GitHub Pages
   - `js_storage.html` が「組織のタブ＋自分のタブ」を 1 つのダッシュボードとして画面に渡し、保存時に分ける。
     組織のタブには `page.unit`（組織のスプレッドシート ID）が付く
   - `js_app.html` の `editMode`（編集モード）と `editing`（今のタブを編集できるか）を混同しない
+- 書類ワークフロー（`service_docflow.js`）：ステータス＝保存先フォルダ内のサブフォルダ。作成者・承認者・判断の記録はファイルの appProperties（`pdCreator` / `pdApprover0…4` など）。
+  ウィジェットの設定は、画面から受け取らず、サーバーが保存済みのダッシュボードから `ref`（`{ unit, widgetId }`）で読む
 - 文言は `js_locale_ja.html` / `js_locale_en.html`。追加するときは両方に足す
 
 ## 落とし穴：テンプレート文字列の中に // を書かない

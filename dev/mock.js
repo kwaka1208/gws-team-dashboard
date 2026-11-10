@@ -70,6 +70,61 @@ window.MOCK_LOG = [];
     },
     api_gmail: () => ok({ unreadMessages: 12, unreadThreads: 9 }),
   };
+  // 書類ワークフロー（service_docflow.js の見本。設定は保存済みのダッシュボードから読む）
+  const ME = "taro@example.com";
+  const flow = { files: [] };
+  function flowConfig(ref) {
+    const json = ref.unit ? db.units[ref.unit].json : db.personal.json;
+    const data = json ? JSON.parse(json) : { pages: [] };
+    const w = data.pages.flatMap((p) => p.widgets).find((x) => x.id === ref.widgetId && x.type === "docflow");
+    if (!w) throw new Error("ウィジェットの設定が見つかりません");
+    return { templates: w.templates.map((x) => ({ id: x.id, name: x.name || "テンプレート", approvers: String(x.approvers || "").split(/[,\s]+/).filter(Boolean) })) };
+  }
+  function flowList(ref) {
+    const cfg = flowConfig(ref);
+    const items = flow.files.map((f) => ({
+      ...f, url: "https://docs.google.com/document/d/" + f.id + "/edit",
+      template: (cfg.templates.find((x) => x.id === f.templateId) || {}).name || "",
+      isCreator: f.creator === ME,
+      canDecide: f.status === "submitted" && f.approvers.includes(ME),
+    }));
+    return { me: ME, templates: cfg.templates, items };
+  }
+  const run = (fn) => new Promise((r) => setTimeout(() => { try { r({ ok: true, data: fn() }); } catch (e) { r({ ok: false, error: e.message }); } }, 30));
+  Object.assign(window.PD_MOCK, {
+    api_docflowList: (ref) => run(() => flowList(ref)),
+    api_docflowCreate: (ref, tid, subject) => run(() => {
+      const cfg = flowConfig(ref);
+      const tpl = cfg.templates.find((x) => x.id === tid);
+      const f = { id: "doc" + (++seq) + "xxxxxxxxxxxxxxxxxxxx", name: (subject || tpl.name) + "_taro_2026-11-10", status: "draft", creator: ME, templateId: tid, approvers: [], modifiedTime: new Date().toISOString() };
+      flow.files.unshift(f);
+      MOCK_LOG.push(["docflowCreate", f.name]);
+      return { created: { id: f.id, name: f.name, url: "about:blank#" + f.id }, list: flowList(ref) };
+    }),
+    api_docflowSubmit: (ref, id, approvers, message) => run(() => {
+      const f = flow.files.find((x) => x.id === id);
+      const tpl = flowConfig(ref).templates.find((x) => x.id === f.templateId);
+      f.approvers = tpl.approvers.length ? tpl.approvers : String(approvers).split(/[,\s]+/).filter(Boolean);
+      if (!f.approvers.length) throw new Error("承認者を指定してください");
+      f.status = "submitted";
+      MOCK_LOG.push(["docflowSubmit", f.name, f.approvers, message]);
+      return flowList(ref);
+    }),
+    api_docflowDecide: (ref, id, action, comment) => run(() => {
+      const f = flow.files.find((x) => x.id === id);
+      if (!f.approvers.includes(ME)) throw new Error("この書類の承認者ではありません");
+      f.status = { approve: "approved", return: "draft", reject: "rejected" }[action];
+      f.decidedBy = ME; f.decidedAt = new Date().toISOString();
+      MOCK_LOG.push(["docflowDecide", f.name, action, comment]);
+      return flowList(ref);
+    }),
+    api_docflowWithdraw: (ref, id) => run(() => {
+      flow.files.find((x) => x.id === id).status = "draft";
+      MOCK_LOG.push(["docflowWithdraw", id]);
+      return flowList(ref);
+    }),
+  });
+  window.MOCK_FLOW = flow;
   window.MOCK_DB = db;
   window.MOCK_LOAD = load;
 })();

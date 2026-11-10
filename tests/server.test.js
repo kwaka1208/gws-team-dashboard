@@ -19,7 +19,7 @@ const ctx = {
   LockService: { getUserLock: () => lock, getScriptLock: () => lock },
 };
 vm.createContext(ctx);
-for (const f of ["config.js", "util.js", "service_personal.js", "service_notices.js", "service_units.js", "api.js", "main.js"]) {
+for (const f of ["config.js", "util.js", "service_personal.js", "service_notices.js", "service_units.js", "service_docflow.js", "api.js", "main.js"]) {
   vm.runInContext(fs.readFileSync(src + f, "utf8"), ctx, { filename: f });
 }
 const assert = require("assert");
@@ -86,4 +86,25 @@ assert(!res.ok && /setup/.test(res.error), JSON.stringify(res));
 assert.strictEqual(r(`unwrapCell_(wrapCell_("=SUM(A1)"))`), "=SUM(A1)");
 assert.strictEqual(r(`wrapCell_("123")`), "|123");
 assert.strictEqual(r(`unwrapCell_("")`), "");
+// 書類ワークフロー：URL から ID、承認者の解析、書類名、承認者の判定、ステータス
+assert.strictEqual(r(`driveIdFromUrl_("https://docs.google.com/document/d/1AbCdEfGhIjKlMnOpQrStUv/edit")`), "1AbCdEfGhIjKlMnOpQrStUv");
+assert.strictEqual(r(`driveIdFromUrl_("https://drive.google.com/drive/folders/1FolderIdAbCdEfGhIjKlMn?usp=sharing")`), "1FolderIdAbCdEfGhIjKlMn");
+assert.strictEqual(r(`driveIdFromUrl_("https://example.com/")`), "");
+assert.deepStrictEqual(r(`parseApprovers_("Boss@Example.com, ops@example.com、bad, ops@example.com")`), ["boss@example.com", "ops@example.com"]);
+assert.strictEqual(r(`parseApprovers_("a@x.jp b@x.jp c@x.jp d@x.jp e@x.jp f@x.jp").length`), 5);
+assert.strictEqual(r(`buildDocName_("{件名}_{作成者}_{日付}", { "件名": "12/24 休暇", "作成者": "taro", "日付": "2026-11-10" })`), "12_24 休暇_taro_2026-11-10");
+assert.strictEqual(r(`buildDocName_("{件名}_{作成者}", { "件名": "", "作成者": "", "テンプレート": "休暇申請" })`), "休暇申請");
+assert.strictEqual(r(`isApprover_(["boss@x.jp"], "boss@x.jp", function () { throw new Error("no need"); })`), true);
+assert.strictEqual(r(`isApprover_(["team@x.jp"], "taro@x.jp", function () { return ["team@x.jp"]; })`), true);
+assert.strictEqual(r(`isApprover_([], "taro@x.jp", function () { return []; })`), false);
+assert.strictEqual(r(`statusOfParents_(["s1"], { draft: "d1", submitted: "s1" })`), "submitted");
+assert.strictEqual(r(`statusOfParents_(["zz"], { draft: "d1" })`), null);
+assert.deepStrictEqual(r(`readApprovers_(approverProps_(["a@x.jp", "b@x.jp"]))`), ["a@x.jp", "b@x.jp"]);
+// 設定はサーバーが保存済みのダッシュボードから読む（自分のタブ）
+userProps._m["dash.n"] = "1";
+userProps._m["dash.0"] = JSON.stringify({ pages: [{ id: "p", widgets: [{ id: "w1", type: "docflow", folder: "https://drive.google.com/drive/folders/1FolderIdAbCdEfGhIjKlMn", templates: [{ id: "t1", name: "休暇", url: "https://docs.google.com/document/d/1TemplateAbCdEfGhIjKlMn/edit", approvers: "boss@x.jp" }, { id: "t2", url: "nope" }] }] }] });
+const cfg = r(`docflowConfig_({ unit: null, widgetId: "w1" })`);
+assert.strictEqual(cfg.folderId, "1FolderIdAbCdEfGhIjKlMn");
+assert.deepStrictEqual(cfg.templates.map((x) => [x.id, x.docId, x.approvers]), [["t1", "1TemplateAbCdEfGhIjKlMn", ["boss@x.jp"]]]);
+assert.throws(() => r(`docflowConfig_({ unit: null, widgetId: "missing" })`), /見つかりません/);
 console.log("server tests passed");

@@ -88,6 +88,7 @@
         <span class="field__label" data-i18n="dialog.type"></span>
         <select class="input" name="type">
           <option value="notice" data-i18n="widget.notice"></option>
+          <option value="docflow" data-i18n="widget.docflow"></option>
           <option value="links" data-i18n="widget.links"></option>
           <option value="note" data-i18n="widget.note"></option>
           <option value="clock" data-i18n="widget.clock"></option>
@@ -143,6 +144,25 @@
           <input class="input input--color" type="color" name="accent">
           <label class="checkbox"><input type="checkbox" name="useAccent"> <span data-i18n="dialog.useAccent"></span></label>
         </span>
+      </label>
+
+      <label class="field" data-for-type="docflow">
+        <span class="field__label" data-i18n="docflow.folder"></span>
+        <input class="input" name="docflowFolder" data-i18n-placeholder="docflow.folderPlaceholder">
+        <span class="field__hint" data-i18n="docflow.folderHint"></span>
+      </label>
+      <div class="field" data-for-type="docflow">
+        <span class="field__label" data-i18n="docflow.templates"></span>
+        <span class="field__hint" data-i18n="docflow.templatesHint"></span>
+        <ul class="docflow-templates" id="docflow-template-list"></ul>
+        <div class="field__row">
+          <button type="button" class="button button--small" id="docflow-template-add" data-i18n="docflow.templateAdd"></button>
+        </div>
+      </div>
+      <label class="field" data-for-type="docflow">
+        <span class="field__label" data-i18n="docflow.namePattern"></span>
+        <input class="input" name="docflowPattern" placeholder="{件名}_{作成者}_{日付}">
+        <span class="field__hint" data-i18n="docflow.namePatternHint"></span>
       </label>
 
       <label class="field" data-for-type="notice">

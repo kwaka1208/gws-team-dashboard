@@ -41,6 +41,7 @@ const { LANGUAGES, applyI18n, language, locale, localized, setLanguage, t } = PD
 /** ウィジェットの種類 → 表示名のキー（locales/*.js）。アドオンの種類は installAddon() で足す */
 const WIDGET_TYPES = {
   notice: "widget.notice",
+  docflow: "widget.docflow",
   links: "widget.links",
   note: "widget.note",
   clock: "widget.clock",
@@ -61,7 +62,7 @@ const DEFAULT_TODO_CATEGORIES = ["todo.category.work", "todo.category.private"];
 /** ウィジェットの高さ（段数）の選択肢と、種類ごとの初期値 */
 const ROW_OPTIONS = [1, 2, 3, 4];
 const DEFAULT_ROWS = {
-  notice: 3, links: 2, note: 2, clock: 1, search: 1, embed: 2, todo: 3, photo: 2, calendar: 3, mail: 1,
+  notice: 3, docflow: 3, links: 2, note: 2, clock: 1, search: 1, embed: 2, todo: 3, photo: 2, calendar: 3, mail: 1,
   weather: 2, timer: 2, worldclock: 2, habit: 2, github: 3, yamato: 2,
 };
 /** Google の API を使うウィジェット */
@@ -86,6 +87,7 @@ const SIZE_NAMES = { s: "S", m: "M", l: "L", xl: "XL" };
  * 編集画面ではこれより小さい大きさを選べず、読み込むときもここまで広げる。
  */
 const MIN_SIZE = {
+  docflow: { size: "m", rows: 2 },   // 書類名・ステータス・操作ボタンを 1 行に並べる
   links: { rows: 1 },
   todo: { size: "m", rows: 2 },      // 幅 S だと入力欄が狭すぎる
   embed: { rows: 2 },                // 1 段だと動画やカレンダーが小さすぎる
@@ -1038,6 +1040,7 @@ function startResize(event, widget, section) {
 function renderWidgetBody(widget) {
   switch (widget.type) {
     case "notice": return renderNotice(widget);
+    case "docflow": return renderDocflow(widget);
     case "links": return renderLinks(widget);
     case "note": return renderNote(widget);
     case "clock": return renderClock(widget);
@@ -1749,7 +1752,7 @@ document.addEventListener("click", (event) => {
 }, true);
 
 /** 更新ボタンを見出しの右に置く（中に更新時刻の行を出さない）ウィジェット */
-const HEADER_REFRESH_WIDGETS = ["calendar", "mail"];
+const HEADER_REFRESH_WIDGETS = ["calendar", "mail", "docflow"];
 
 /** 見出しの更新ボタンに出す説明（最後に読み込んだ時刻つき） */
 function refreshButtonTitle(widget) {
@@ -2560,6 +2563,41 @@ function renderGitHubLists({ lists }) {
  * fill：編集ダイアログに今の値を入れる（widget が null なら初期値）/ save：ダイアログの値を保存
  */
 const WIDGET_FORMS = {
+  docflow: {
+    init: (w) => { w.folder = ""; w.templates = []; w.namePattern = ""; },
+    normalize: (w) => {
+      w.folder = typeof w.folder === "string" ? w.folder : "";
+      w.namePattern = typeof w.namePattern === "string" ? w.namePattern : "";
+      w.templates = (Array.isArray(w.templates) ? w.templates : [])
+        .filter((x) => x && typeof x.url === "string")
+        .map((x) => ({
+          id: x.id ? String(x.id) : uid(),
+          name: typeof x.name === "string" ? x.name : "",
+          url: x.url,
+          approvers: typeof x.approvers === "string" ? x.approvers : "",
+        }));
+    },
+    fill: (f, w) => {
+      f.docflowFolder.value = w?.folder || "";
+      f.docflowPattern.value = w?.namePattern || "";
+      $("#docflow-template-list").replaceChildren();
+      for (const tpl of w?.templates || []) addDocflowTemplateRow(tpl);
+      if (!w?.templates?.length) addDocflowTemplateRow(null);
+    },
+    save: (f, w) => {
+      w.folder = f.docflowFolder.value.trim();
+      w.namePattern = f.docflowPattern.value.trim();
+      w.templates = $$(".docflow-templates__row", el.widgetForm)
+        .map((row) => ({
+          id: row.dataset.id,
+          name: $("[name=dfName]", row).value.trim(),
+          url: $("[name=dfUrl]", row).value.trim(),
+          approvers: $("[name=dfApprovers]", row).value.trim(),
+        }))
+        .filter((x) => x.url);
+      googleCache.delete(w.id); // 設定を変えたら読み直す
+    },
+  },
   notice: {
     init: (w) => { w.scope = "all"; },
     normalize: (w) => { w.scope = typeof w.scope === "string" && w.scope ? w.scope : "all"; },
@@ -2939,6 +2977,254 @@ function showNoticeDetail(n) {
 }
 
 storage.onNoticesChanged(() => refreshNoticeWidgets());
+
+/* ================================================================== */
+/* 書類ワークフロー                                                       */
+/* ================================================================== */
+/*
+ * テンプレートから Google ドキュメントを作り、提出・承認する（サーバーは service_docflow.js）。
+ * 一覧と操作はサーバーに頼み、設定（保存先・テンプレート・承認者）はサーバーが保存済みのものを読む。
+ */
+
+const DOCFLOW_STATUSES = ["draft", "submitted", "approved", "rejected"];
+const DOCFLOW_REFRESH_MS = 2 * 60 * 1000;
+/** ウィジェットごとに選んでいるステータスの絞り込み（保存しない表示状態） */
+const docflowFilters = new Map();
+
+/** そのウィジェットがあるタブ（共有タブなら、その ID をサーバーに伝える） */
+function docflowRef(widget) {
+  const p = state.pages.find((x) => x.widgets.includes(widget)) || page();
+  return { unit: p.unit || null, widgetId: widget.id };
+}
+
+/** 保存の途中・保存待ちの変更があれば、終わるまで待つ（サーバーが新しい設定を読めるように） */
+async function whenSaved() {
+  // 変更は「描き直し → 保存の予約」の順に行われるので、予約が入るまで一拍待つ
+  await new Promise((r) => setTimeout(r, 0));
+  if (saveTimer) await saveNow();
+  for (let i = 0; saving && i < 100; i += 1) await new Promise((r) => setTimeout(r, 100));
+}
+
+function docflowSet(widget, list) {
+  const entry = googleCache.get(widget.id) || {};
+  googleCache.set(widget.id, { ...entry, key: docflowKey(widget), data: list, error: null, fetchedAt: Date.now(), loading: false });
+  refreshWidgetBody(widget);
+}
+
+function docflowKey(widget) {
+  return JSON.stringify([widget.folder, widget.namePattern, widget.templates]);
+}
+
+function renderDocflow(widget) {
+  if (!widget.folder || !widget.templates.length) {
+    return h("p", { class: "widget__empty" }, t("docflow.notConfigured"));
+  }
+  return renderRemote(widget, {
+    cacheKey: docflowKey(widget),
+    load: async () => {
+      await whenSaved();
+      return storage.call("api_docflowList", docflowRef(widget));
+    },
+    view: (data) => renderDocflowList(widget, data),
+    refreshMs: DOCFLOW_REFRESH_MS,
+  });
+}
+
+function docflowDate(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(locale(), { month: "numeric", day: "numeric" });
+}
+
+function renderDocflowList(widget, data) {
+  const filter = docflowFilters.get(widget.id) || "all";
+  const counts = Object.fromEntries(DOCFLOW_STATUSES.map((s) => [s, data.items.filter((i) => i.status === s).length]));
+  const items = filter === "all" ? data.items : data.items.filter((i) => i.status === filter);
+  const waiting = data.items.filter((i) => i.canDecide).length;
+
+  const select = h("select", {
+    class: "input input--small",
+    "aria-label": t("docflow.filter"),
+    onchange: () => { docflowFilters.set(widget.id, select.value); refreshWidgetBody(widget); },
+  },
+    h("option", { value: "all" }, t("docflow.all", { n: data.items.length })),
+    ...DOCFLOW_STATUSES.map((s) => h("option", { value: s }, `${t(`docflow.status.${s}`)}（${counts[s]}）`)),
+  );
+  select.value = filter;
+
+  const bar = h("div", { class: "docflow__bar" },
+    data.templates.length ? h("button", { type: "button", class: "button button--small button--primary", onclick: (e) => docflowCreate(widget, data, e) }, t("docflow.create")) : null,
+    select,
+    h("span", { class: "docflow__spacer" }),
+    waiting ? h("strong", { class: "docflow__waiting" }, t("docflow.waiting", { n: waiting })) : null,
+  );
+
+  if (!items.length) {
+    return h("div", { class: "docflow" }, bar, h("p", { class: "widget__empty" }, t("docflow.empty")));
+  }
+
+  const rows = items.map((item) => {
+    const actions = [];
+    const act = (label, onclick, cls = "") => h("button", { type: "button", class: `button button--small ${cls}`, onclick }, label);
+    if (item.status === "draft" && (item.isCreator || !item.creator)) actions.push(act(t("docflow.submit"), () => docflowSubmit(widget, data, item), "button--primary"));
+    if (item.status === "submitted" && item.canDecide) actions.push(act(t("docflow.decide"), () => docflowDecide(widget, item), "button--primary"));
+    if (item.status === "submitted" && item.isCreator) actions.push(act(t("docflow.withdraw"), () => docflowWithdraw(widget, item), "button--ghost"));
+    const who = item.creator ? item.creator.split("@")[0] : "";
+    const meta = [item.template, who, t("docflow.updated", { date: docflowDate(item.modifiedTime) })];
+    if (item.status === "submitted" && item.approvers.length) meta.push(t("docflow.approversShort", { list: item.approvers.map((a) => a.split("@")[0]).join("・") }));
+    if ((item.status === "approved" || item.status === "rejected") && item.decidedBy) meta.push(t("docflow.decidedBy", { name: item.decidedBy.split("@")[0], date: docflowDate(item.decidedAt) }));
+    return h("li", { class: `docflow-item${item.canDecide ? " is-waiting" : ""}` },
+      h("span", { class: `docflow-status docflow-status--${item.status || "unknown"}` }, item.status ? t(`docflow.status.${item.status}`) : "?"),
+      h("span", { class: "docflow-item__main" },
+        h("a", { class: "docflow-item__name", href: item.url, target: "_blank", rel: "noopener noreferrer", title: t("docflow.open") }, item.name),
+        h("span", { class: "docflow-item__meta" }, meta.filter(Boolean).join(" · "))),
+      actions.length ? h("span", { class: "docflow-item__actions" }, ...actions) : null,
+    );
+  });
+  return h("div", { class: "docflow" }, bar, h("ul", { class: "docflow-list" }, ...rows));
+}
+
+/**
+ * 小さな入力ダイアログ。fields: [{ name, label, type: "text"|"textarea"|"select"|"note", options, value, hint }]
+ * actions: [{ value, label, kind: "primary"|"danger"|"" , needs: [必須にする欄の name] }]
+ * @returns {Promise<{ action: string, values: object } | null>}
+ */
+function formDialog({ title, fields, actions }) {
+  return new Promise((resolve) => {
+    const form = h("form", { method: "dialog", class: "dialog__body" }, h("h2", { class: "dialog__title" }, title));
+    for (const f of fields) {
+      if (f.type === "note") { form.append(h("p", { class: "field__hint" }, f.text)); continue; }
+      const input = f.type === "textarea" ? h("textarea", { class: "input", name: f.name, rows: "4" })
+        : f.type === "select" ? h("select", { class: "input", name: f.name }, ...f.options.map((o) => h("option", { value: o.value }, o.label)))
+        : h("input", { class: "input", name: f.name, placeholder: f.placeholder || null });
+      if (f.value != null) input.value = f.value;
+      form.append(h("label", { class: "field" }, h("span", { class: "field__label" }, f.label), input, f.hint ? h("span", { class: "field__hint" }, f.hint) : null));
+    }
+    form.append(h("div", { class: "dialog__actions" },
+      h("span", { class: "dialog__spacer" }),
+      h("button", { value: "cancel", class: "button", formnovalidate: true }, t("common.cancel")),
+      ...actions.map((a) => h("button", { value: a.value, class: `button${a.kind ? ` button--${a.kind}` : ""}` }, a.label))));
+    const dialog = h("dialog", { class: "dialog" }, form);
+    let result = null;
+    form.addEventListener("submit", (event) => {
+      const value = event.submitter?.value;
+      if (!value || value === "cancel") return;
+      const action = actions.find((a) => a.value === value);
+      const values = Object.fromEntries(fields.filter((f) => f.name).map((f) => [f.name, form.elements[f.name].value.trim()]));
+      const missing = (action?.needs || []).find((n) => !values[n]);
+      if (missing) {
+        event.preventDefault();
+        alert(t("docflow.needField", { label: fields.find((f) => f.name === missing).label }));
+        form.elements[missing].focus();
+        return;
+      }
+      result = { action: value, values };
+    });
+    dialog.addEventListener("close", () => { dialog.remove(); resolve(result); });
+    document.body.append(dialog);
+    dialog.showModal();
+  });
+}
+
+/** サーバーに頼んで、終わったら一覧を新しくする（途中は「処理中」を出す） */
+async function docflowRun(widget, name, args, doneMessage) {
+  setStatus(t("docflow.working"));
+  try {
+    const result = await storage.call(name, docflowRef(widget), ...args);
+    setStatus("");
+    if (doneMessage) showToast(doneMessage);
+    return result;
+  } catch (err) {
+    setStatus("");
+    alert(err.message);
+    return null;
+  }
+}
+
+async function docflowCreate(widget, data) {
+  const res = await formDialog({
+    title: t("docflow.createTitle"),
+    fields: [
+      { name: "template", label: t("docflow.template"), type: "select", options: data.templates.map((tpl) => ({ value: tpl.id, label: tpl.name })) },
+      { name: "subject", label: t("docflow.subject"), placeholder: t("docflow.subjectPlaceholder"), hint: t("docflow.subjectHint") },
+    ],
+    actions: [{ value: "ok", label: t("docflow.createButton"), kind: "primary" }],
+  });
+  if (!res) return;
+  // ポップアップが止められないよう、ボタンを押した流れのうちに空のタブを開いておく
+  let win = null;
+  try { win = window.open("", "_blank"); } catch { /* 開けない環境 */ }
+  await whenSaved();
+  const result = await docflowRun(widget, "api_docflowCreate", [res.values.template, res.values.subject]);
+  if (!result) { win?.close(); return; }
+  docflowSet(widget, result.list);
+  if (win && !win.closed) win.location.href = result.created.url;
+  else showToast(t("docflow.created", { name: result.created.name }), { label: t("docflow.open"), run: () => window.open(result.created.url, "_blank") });
+}
+
+async function docflowSubmit(widget, data, item) {
+  const tpl = data.templates.find((x) => x.name === item.template);
+  const fixed = tpl?.approvers?.length ? tpl.approvers : null;
+  const res = await formDialog({
+    title: t("docflow.submitTitle", { name: item.name }),
+    fields: [
+      fixed ? { type: "note", text: t("docflow.approversFixed", { list: fixed.join("、") }) }
+        : { name: "approvers", label: t("docflow.approvers"), placeholder: "name@example.com", hint: t("docflow.approversHint") },
+      { name: "message", label: t("docflow.message"), type: "textarea", hint: t("docflow.messageHint") },
+    ],
+    actions: [{ value: "ok", label: t("docflow.submit"), kind: "primary", needs: fixed ? [] : ["approvers"] }],
+  });
+  if (!res) return;
+  const list = await docflowRun(widget, "api_docflowSubmit", [item.id, res.values.approvers || "", res.values.message], t("docflow.submitted"));
+  if (list) docflowSet(widget, list);
+}
+
+async function docflowDecide(widget, item) {
+  const res = await formDialog({
+    title: t("docflow.decideTitle", { name: item.name }),
+    fields: [
+      { type: "note", text: t("docflow.decideNote", { name: item.creator }) },
+      { name: "comment", label: t("docflow.comment"), type: "textarea", hint: t("docflow.commentHint") },
+    ],
+    actions: [
+      { value: "reject", label: t("docflow.reject"), kind: "danger", needs: ["comment"] },
+      { value: "return", label: t("docflow.return"), needs: ["comment"] },
+      { value: "approve", label: t("docflow.approve"), kind: "primary" },
+    ],
+  });
+  if (!res) return;
+  const done = { approve: t("docflow.approved"), return: t("docflow.returned"), reject: t("docflow.rejected") }[res.action];
+  const list = await docflowRun(widget, "api_docflowDecide", [item.id, res.action, res.values.comment], done);
+  if (list) docflowSet(widget, list);
+}
+
+async function docflowWithdraw(widget, item) {
+  if (!confirm(t("docflow.withdrawConfirm", { name: item.name }))) return;
+  const list = await docflowRun(widget, "api_docflowWithdraw", [item.id], t("docflow.withdrawn"));
+  if (list) docflowSet(widget, list);
+}
+
+/* 設定画面：テンプレートの行 */
+function addDocflowTemplateRow(tpl) {
+  const name = h("input", { class: "input", name: "dfName", placeholder: t("docflow.templateName"), "aria-label": t("docflow.templateName") });
+  const url = h("input", { class: "input", name: "dfUrl", placeholder: t("docflow.templateUrl"), "aria-label": t("docflow.templateUrl") });
+  const approvers = h("input", { class: "input", name: "dfApprovers", placeholder: t("docflow.templateApprovers"), "aria-label": t("docflow.templateApprovers") });
+  name.value = tpl?.name || "";
+  url.value = tpl?.url || "";
+  approvers.value = tpl?.approvers || "";
+  const row = h("li", { class: "docflow-templates__row", dataset: { id: tpl?.id || uid() } },
+    h("div", { class: "docflow-templates__fields" }, name, url, approvers),
+    h("button", {
+      type: "button", class: "button button--icon button--ghost", title: t("docflow.templateRemove"), "aria-label": t("docflow.templateRemove"),
+      onclick: () => row.remove(),
+    }, "×"));
+  $("#docflow-template-list").append(row);
+  return row;
+}
+
+$("#docflow-template-add").addEventListener("click", () => {
+  $("input", addDocflowTemplateRow(null)).focus();
+});
 
 /* ================================================================== */
 /* ToDo                                                                 */

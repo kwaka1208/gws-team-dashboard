@@ -4,9 +4,21 @@
   "runtimeVersion": "V8",
   "dependencies": {
     "enabledAdvancedServices": [
-      { "userSymbol": "Drive", "serviceId": "drive", "version": "v3" },
-      { "userSymbol": "Calendar", "serviceId": "calendar", "version": "v3" },
-      { "userSymbol": "Gmail", "serviceId": "gmail", "version": "v1" }
+      {
+        "userSymbol": "Drive",
+        "serviceId": "drive",
+        "version": "v3"
+      },
+      {
+        "userSymbol": "Calendar",
+        "serviceId": "calendar",
+        "version": "v3"
+      },
+      {
+        "userSymbol": "Gmail",
+        "serviceId": "gmail",
+        "version": "v1"
+      }
     ]
   },
   "webapp": {
@@ -16,8 +28,10 @@
   "oauthScopes": [
     "https://www.googleapis.com/auth/userinfo.email",
     "https://www.googleapis.com/auth/spreadsheets",
-    "https://www.googleapis.com/auth/drive.readonly",
+    "https://www.googleapis.com/auth/drive",
     "https://www.googleapis.com/auth/calendar.readonly",
-    "https://www.googleapis.com/auth/gmail.labels"
+    "https://www.googleapis.com/auth/gmail.labels",
+    "https://www.googleapis.com/auth/script.send_mail",
+    "https://www.googleapis.com/auth/groups"
   ]
 }
