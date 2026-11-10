@@ -439,6 +439,30 @@
   </dialog>
 
   <script>
+    /*
+     * 思わぬエラーで表示が止まったとき、原因がわかるよう画面上部の帯に出す
+     * （Apps Script の画面ではブラウザのコンソールが見つけにくいため）
+     */
+    (function () {
+      function report(message, where) {
+        var banner = document.getElementById("banner");
+        if (!banner) return;
+        var line = "エラー：" + message + (where ? "（" + where + "）" : "");
+        banner.hidden = false;
+        banner.dataset.kind = "error";
+        banner.textContent = banner.textContent && banner.textContent !== line ? banner.textContent + " ／ " + line : line;
+      }
+      window.addEventListener("error", function (event) {
+        var where = event.lineno ? "行 " + event.lineno + (event.colno ? ":" + event.colno : "") : "";
+        report(event.message || String(event.error), where);
+      });
+      window.addEventListener("unhandledrejection", function (event) {
+        var reason = event.reason;
+        report(reason && reason.message ? reason.message : String(reason), reason && reason.stack ? String(reason.stack).split("\n")[1] : "");
+      });
+    })();
+  </script>
+  <script>
     /* サーバー（doGet）が埋め込んだ、最初の表示に使うデータ */
     window.PD = {};
     window.__BOOT__ = <?!= bootJson ?>;
