@@ -467,9 +467,14 @@
     window.PD = {};
     window.__BOOT__ = <?!= bootJson ?>;
   </script>
-  <?!= include_('vendor_sortable'); ?>
-  <?!= include_('vendor_marked'); ?>
-  <?!= include_('vendor_purify'); ?>
+  <!--
+    外部ライブラリは CDN から読み込む（版を固定し、integrity で中身を確かめる）。
+    Apps Script は画面の HTML を書き出すときに、JS のテンプレート文字列（`…`）の中の「//」を
+    コメントとして消してしまい、ライブラリが壊れるため、ファイルに同梱できない。
+  -->
+  <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.7/Sortable.min.js" integrity="sha384-DgmC6Xe2bSN2WjTDXzWYbUbxyhNP+NNkGDR/g78pCXV7E7rcVTGxVg0uIVCUUcBc" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/marked@18.1.1/lib/marked.umd.js" integrity="sha384-rATToyt6602Jnq8c7w8HZwmyOUgPL7mzxX01FBWoV48ns/EgkakGozpES+PnaYOI" crossorigin="anonymous"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.4.17/dist/purify.min.js" integrity="sha384-P0JNneQf81HOl9VwNXK76cQ9VMD6Nfsnepxb0cCOg8+UzEdzgPHAPV4wVQrvYQSx" crossorigin="anonymous"></script>
   <?!= include_('js_config'); ?>
   <?!= include_('js_locale_ja'); ?>
   <?!= include_('js_locale_en'); ?>

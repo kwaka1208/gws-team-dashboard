@@ -71,4 +71,5 @@ window.MOCK_LOG = [];
     api_gmail: () => ok({ unreadMessages: 12, unreadThreads: 9 }),
   };
   window.MOCK_DB = db;
+  window.MOCK_LOAD = load;
 })();

@@ -23,6 +23,16 @@ Google Apps Script（GAS）の Web アプリ。personal-dashboard（GitHub Pages
   - `js_app.html` の `editMode`（編集モード）と `editing`（今のタブを編集できるか）を混同しない
 - 文言は `js_locale_ja.html` / `js_locale_en.html`。追加するときは両方に足す
 
+## 落とし穴：テンプレート文字列の中に // を書かない
+
+Apps Script は画面の HTML を書き出すときに `<script>` のコメントを消すが、テンプレート文字列（`…`）を
+文字列として扱わないため、`https://…` のような `//` 以降が消えて構文エラーになる
+（画面には見出しだけが出て止まる）。
+
+- URL などを組み立てるときは、文字列の連結（`"https://…/" + id`）を使う
+- 外部ライブラリは同じ理由で同梱できないので、`index.html` で CDN から読み込む（版を固定し、integrity 付き）
+- `npm test` の `tests/html.test.js` が、同じ削除をかけてから構文を確かめる。`npm run preview` も同じ削除をかける
+
 ## 確かめ方
 
 - `npm test`：サーバー側のテスト（GAS の機能を見本に置き換えて Node で実行）

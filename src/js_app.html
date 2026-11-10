@@ -1938,7 +1938,7 @@ function renderMail(widget) {
     load: (token) => fetchGmailUnread(token, widget.label),
     view: (data) => h("a", {
       class: "mail",
-      href: `https://mail.google.com/mail/?authuser=${encodeURIComponent(currentEmail)}#${label.hash}`,
+      href: "https://mail.google.com/mail/?authuser=" + encodeURIComponent(currentEmail) + "#" + label.hash,
       target: "_blank",
       rel: "noopener noreferrer",
       title: t("mail.open"),

@@ -74,7 +74,7 @@ function toYouTubeEmbed(raw) {
 
   // youtube-nocookie.com はプライバシー強化モード（再生するまで Cookie を使わない）
   const path = id ? `embed/${id}` : "embed/videoseries";
-  return { src: `https://www.youtube-nocookie.com/${path}?${params}`, vertical };
+  return { src: "https://www.youtube-nocookie.com/" + path + "?" + params, vertical };
 }
 
 /**
@@ -98,7 +98,7 @@ function toImageUrl(raw) {
   if (host === "drive.google.com" || host === "docs.google.com") {
     const m = url.pathname.match(/\/file\/d\/([\w-]+)/);
     const id = m ? m[1] : url.searchParams.get("id");
-    if (id && /^[\w-]+$/.test(id)) return `https://lh3.googleusercontent.com/d/${id}`;
+    if (id && /^[\w-]+$/.test(id)) return "https://lh3.googleusercontent.com/d/" + id;
   }
   if (host === "www.dropbox.com" || host === "dropbox.com") {
     url.searchParams.delete("dl");

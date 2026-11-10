@@ -67,7 +67,7 @@ function describeWeather(code) {
 async function geocode(name) {
   const search = async (q) => {
     const params = new URLSearchParams({ name: q, count: "1", language: language(), format: "json" });
-    const data = await getJson(`https://geocoding-api.open-meteo.com/v1/search?${params}`);
+    const data = await getJson("https://geocoding-api.open-meteo.com/v1/search?" + params);
     return data.results?.[0];
   };
   let place = await search(name);
@@ -93,7 +93,7 @@ async function fetchWeather(lat, lon) {
     forecast_days: "7",
     wind_speed_unit: "ms",
   });
-  const data = await getJson(`https://api.open-meteo.com/v1/forecast?${params}`);
+  const data = await getJson("https://api.open-meteo.com/v1/forecast?" + params);
   const c = data.current || {};
   const d = data.daily || {};
   return {
@@ -148,7 +148,7 @@ async function fetchGitHub(token, keys, limit = 10) {
     const params = new URLSearchParams({ q: GITHUB_LISTS[key].query(user.login), sort: "updated", order: "desc", per_page: String(limit) });
     let data;
     try {
-      data = await getJson(`https://api.github.com/search/issues?${params}`, { headers });
+      data = await getJson("https://api.github.com/search/issues?" + params, { headers });
     } catch (err) {
       if (err.status === 403 || err.status === 429) throw new ServiceError(t("github.rateLimited"));
       throw err;

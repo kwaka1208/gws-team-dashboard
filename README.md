@@ -165,7 +165,7 @@ Apps Script に送るのは `src/` だけです（`.clasp.json` の `rootDir`）
 | `src/js_app.html` | 画面とウィジェット（personal-dashboard の app.js が元） |
 | `src/css_*.html` | 見た目（`css_org.html` が組織のタブとお知らせ、`css_custom.html` が着せ替え用） |
 | `dev/` | デプロイせずに画面を確かめるためのプレビュー（`npm run preview` → `dev/preview.html`） |
-| `tests/` | サーバー側のテスト（`npm test`） |
+| `tests/` | テスト（`npm test`）。サーバー側の処理と、画面の JS が Apps Script の書き出しで壊れないか |
 
 ### 見た目を変える
 
@@ -181,4 +181,4 @@ Apps Script に送るのは `src/` だけです（`.clasp.json` の `rootDir`）
 
 ## ライセンス
 
-MIT License。同梱しているライブラリ（SortableJS・marked・DOMPurify）のライセンスは `licenses/` にあります。
+MIT License。使っているライブラリ（SortableJS・marked・DOMPurify。画面を開いたときに CDN から読み込みます）のライセンスは `licenses/` にあります。
