@@ -6,7 +6,8 @@ function makeProps() { const m = {}; return { getProperties: () => ({ ...m }), g
 const userProps = makeProps(), scriptProps = makeProps(), scriptCache = makeCache(), userCache = makeCache();
 const lock = { tryLock: () => true, releaseLock: () => {} };
 const ctx = {
-  console, Date, JSON, Math, Object, Array, String, Number, Boolean, isNaN, isFinite, Error,
+  // エラーの経路もテストするので、run_() が出すエラーログは表示しない
+  console: { ...console, error: () => {}, warn: () => {} }, Date, JSON, Math, Object, Array, String, Number, Boolean, isNaN, isFinite, Error,
   Session: { getActiveUser: () => ({ getEmail: () => "taro@example.com" }), getScriptTimeZone: () => "Asia/Tokyo" },
   Utilities: {
     getUuid: () => crypto.randomUUID(),

@@ -67,18 +67,20 @@ Google サイト（埋め込み）
 
    ```sh
    npm install -g @google/clasp
-   clasp login                  # 組織のアカウントでログイン
    git clone https://github.com/kwaka1208/gws-team-dashboard
    cd gws-team-dashboard
    cp .clasp.json.example .clasp.json   # scriptId をコピーした ID に書き換える
-   clasp push
+   cp Makefile.example Makefile         # よく使う操作をまとめたもの（Git には入れません）
+   make login                           # 組織のアカウントでログイン
+   make push
    ```
 
    初めて clasp を使うときは、[Apps Script API の設定](https://script.google.com/home/usersettings) をオンにしてください。
+   `make` だけを実行すると、使えるコマンドの一覧が出ます。
 
 ### 2. 画面の名前を決める（任意）
 
-`src/config.js` の `title`（初期値「チームダッシュボード」）を変えると、ブラウザのタブや、作られるスプレッドシートの名前が変わります。変えたら `clasp push` し直します。
+`src/config.js` の `title`（初期値「チームダッシュボード」）を変えると、ブラウザのタブや、作られるスプレッドシートの名前が変わります。変えたら `make push` し直します。
 
 ### 3. setup を実行する
 
@@ -120,8 +122,16 @@ Google ドライブで、スプレッドシートを次のように共有しま�
    - アクセスできるユーザー：**（組織名）内の全員**
 3. 表示された URL（`https://script.google.com/a/macros/…/exec`）を開いて、動くか確かめます。
 
-コードを直したときは、**デプロイ → デプロイを管理 → ✎ → バージョン：新バージョン** で更新すると、URL が変わりません。
-コマンドで更新する場合は、デプロイ ID を環境変数に入れて `DEPLOYMENT_ID=… npm run deploy` を実行します。
+4. **デプロイ → デプロイを管理** に出るデプロイ ID を、`Makefile` の `DEPLOY_ID` に書きます。
+
+コードを直したら、次のどちらかで公開中のアプリを更新します。どちらも同じデプロイ ID のまま新しいバージョンにするので、URL は変わりません。
+
+```sh
+make deploy d="お知らせの表示を修正"   # 説明を付けて更新
+make release v=v0.2                   # テスト → src/config.js のバージョンを書き換え → push → 更新
+```
+
+作業中の確認は、`make push` してから、エディタの **デプロイ → デプロイをテスト** の URL（末尾が `/dev`）で行うと、デプロイし直さずに最新のコードを試せます。
 
 ### 7. Google サイトに埋め込む
 
@@ -220,8 +230,9 @@ Apps Script に送るのは `src/` だけです（`.clasp.json` の `rootDir`）
 | `src/js_storage.html` | サーバーとのやり取り。共有タブと自分のタブを分けて保存する |
 | `src/js_app.html` | 画面とウィジェット（personal-dashboard の app.js が元） |
 | `src/css_*.html` | 見た目（`css_org.html` が共有タブとお知らせ、`css_custom.html` が着せ替え用） |
-| `dev/` | デプロイせずに画面を確かめるためのプレビュー（`npm run preview` → `dev/preview.html`） |
-| `tests/` | テスト（`npm test`）。サーバー側の処理と、画面の JS が Apps Script の書き出しで壊れないか |
+| `dev/` | デプロイせずに画面を確かめるためのプレビュー（`make preview` → `dev/preview.html`） |
+| `Makefile.example` | clasp のよく使う操作（`make help` で一覧）。`Makefile` にコピーして、`DEPLOY_ID` を書いて使う |
+| `tests/` | テスト（`make test`）。サーバー側の処理と、画面の JS が Apps Script の書き出しで壊れないか |
 
 ### 見た目を変える
 

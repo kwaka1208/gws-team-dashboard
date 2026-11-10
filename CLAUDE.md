@@ -37,6 +37,10 @@ Apps Script は画面の HTML を書き出すときに `<script>` のコメン�
 
 ## 確かめ方
 
+`Makefile.example` を `Makefile` にコピーして使う（`Makefile` は Git に入れない。`DEPLOY_ID` を書く）。`make help` で一覧。
+バージョンは `src/config.js` の `const APP_VERSION = "…";`（`make release v=…` が書き換える。画面の下に表示）。
+
+
 - `npm test`：サーバー側のテスト（GAS の機能を見本に置き換えて Node で実行）
 - `npm run preview`：`dev/preview.html` を作る。`dev/mock.js` の見本データで画面を確かめられる
-- 実際の動作は、`clasp push` してテスト用のデプロイ（デプロイ → デプロイをテスト）で確かめる
+- 実際の動作は、`make push` してテスト用のデプロイ（デプロイ → デプロイをテスト）で確かめる

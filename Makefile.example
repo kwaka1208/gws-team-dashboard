@@ -1,0 +1,87 @@
+# clasp でのよく使う操作（GAS アプリ開発の標準 Makefile）
+#   make help で一覧を表示します。
+#
+# このファイルは Makefile.example です。コピーして使ってください（Makefile は Git に入れません）。
+#   cp Makefile.example Makefile   → 下の DEPLOY_ID を自分のデプロイ ID に書き換える
+
+COMMAND = clasp
+# デプロイ ID（Apps Script のエディタ → デプロイ → デプロイを管理 で確認）
+DEPLOY_ID =
+# APP_VERSION（const APP_VERSION = "v1.0";）を書いているファイル
+VERSION_FILE = src/config.js
+
+.PHONY: help login push pull open container app create-deploy deploy version release test preview
+
+# 使えるコマンドの一覧（make だけで実行したときもこれ）
+help:
+	@echo "make login                  clasp にログイン"
+	@echo "make push                   スクリプトをクラウドに反映"
+	@echo "make pull                   クラウドのスクリプトをローカルに取り込み"
+	@echo "make open                   スクリプトのエディタを開く"
+	@echo "make container              コンテナ（スプレッドシートなど）を開く ※コンテナバインドのとき"
+	@echo "make app                    Web アプリを開く"
+	@echo "make create-deploy d=説明   新しいデプロイを作成"
+	@echo "make deploy d=説明          デプロイを更新（URL は変わらない）"
+	@echo "make version                現在のバージョンを表示"
+	@echo "make release v=v1.01        バージョンを書き換えて push・デプロイを更新"
+	@echo "make test                   テスト（npm test）"
+	@echo "make preview                手元で見るプレビューを作る（npm run preview）"
+
+# 認証
+login:
+	$(COMMAND) login
+
+# スクリプトをクラウドに反映
+push:
+	$(COMMAND) push
+
+# クラウドのスクリプトをローカルに取り込み
+pull:
+	$(COMMAND) pull
+
+# スクリプトを開く
+open:
+	$(COMMAND) open-script
+
+# コンテナを開く（コンテナバインドのスクリプトのとき）
+container:
+	$(COMMAND) open-container
+
+# Web アプリを開く
+app: check-deploy-id
+	$(COMMAND) open-web-app $(DEPLOY_ID)
+
+# 新しいデプロイを作成
+create-deploy:
+	$(if $(d),,$(error エラー: 引数 d が指定されていません。例: make create-deploy d=説明))
+	$(COMMAND) deploy --description "$(d)"
+
+# デプロイを更新（同じデプロイ ID のまま新しいバージョンにするので、URL は変わらない）
+deploy: check-deploy-id
+	$(if $(d),,$(error エラー: 引数 d が指定されていません。例: make deploy d=説明))
+	$(COMMAND) deploy --deploymentId $(DEPLOY_ID) --description "$(d)"
+
+# 現在のバージョン
+version:
+	@echo "現在のバージョン: $$(sed -n 's/.*const APP_VERSION = "\([^"]*\)".*/\1/p' $(VERSION_FILE))"
+
+# バージョンを書き換えてリリース（テスト → 書き換え → push → デプロイを更新）
+# sed -i.bak は Mac（BSD）と Linux（GNU）のどちらでも動く書き方
+release: check-deploy-id
+	$(if $(v),,$(error エラー: 引数 v が指定されていません。例: make release v=v1.01))
+	$(MAKE) test
+	sed -i.bak 's/const APP_VERSION = "[^"]*"/const APP_VERSION = "$(v)"/' $(VERSION_FILE) && rm -f $(VERSION_FILE).bak
+	@grep -q 'const APP_VERSION = "$(v)"' $(VERSION_FILE) || (echo "エラー: $(VERSION_FILE) に const APP_VERSION が見つかりません" && exit 1)
+	$(COMMAND) push
+	$(COMMAND) deploy --deploymentId $(DEPLOY_ID) --description "$(v)"
+
+# テストとプレビュー（このリポジトリ用）
+test:
+	npm test
+
+preview:
+	npm run preview
+
+# デプロイ ID が設定されているか
+check-deploy-id:
+	$(if $(DEPLOY_ID),,$(error エラー: DEPLOY_ID がありません。Makefile の DEPLOY_ID にデプロイ ID を書いてください))

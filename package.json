@@ -5,8 +5,6 @@
   "license": "MIT",
   "scripts": {
     "test": "node tests/server.test.js && node tests/html.test.js",
-    "preview": "node dev/preview.mjs",
-    "push": "clasp push",
-    "deploy": "clasp push && clasp deploy --deploymentId \"$DEPLOYMENT_ID\" --description \"$(date +%Y-%m-%d)\""
+    "preview": "node dev/preview.mjs"
   }
 }
