@@ -5,13 +5,19 @@
 /** 利用者に見せるエラー（メッセージをそのまま画面に出す） */
 class UserError extends Error {}
 
+/** 権限が足りないときの案内（更新で権限が増えたのに、まだ許可していないとき） */
+const AUTH_HELP = 'このアプリの新しい権限がまだ許可されていません。管理者は「clasp push --force」で appsscript.json を送ったあと、Apps Script のエディタで authorize を実行して許可してください。'
+  + 'それでも直らないときは、Google アカウントの「サードパーティ製のアプリとサービス」からこのアプリへのアクセスを削除し、開き直して許可してください。';
+
 /** 公開関数の共通の包み：{ ok: true, data } / { ok: false, error } */
 function run_(fn) {
   try {
     return { ok: true, data: fn() };
   } catch (err) {
     console.error(err && err.stack ? err.stack : err);
-    return { ok: false, error: err instanceof UserError ? err.message : '処理に失敗しました（' + (err && err.message ? err.message : err) + '）' };
+    const text = String(err && err.message ? err.message : err);
+    if (/googleapis\.com\/auth\//.test(text)) return { ok: false, error: AUTH_HELP + '［詳細：' + text.slice(0, 200) + '］' };
+    return { ok: false, error: err instanceof UserError ? text : '処理に失敗しました（' + text + '）' };
   }
 }
 

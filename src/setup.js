@@ -3,6 +3,7 @@
  *
  *   setup()      … 初回だけ。管理用スプレッドシートを作り、「全社」の組織を用意する
  *   syncUnits()  … 「組織」シートに行を足したら実行。スプレッドシート ID が空の行に、組織のスプレッドシートを作る
+ *   authorize()  … 権限の許可だけを行う（権限が増えた更新のあと、許可の画面を出すために実行する）
  *
  * 実行すると、作ったスプレッドシートの URL が「実行ログ」に出ます。
  * 共有の設定（誰が見られるか・編集できるか）は、Google ドライブで行ってください（README の手順 4）。
@@ -66,4 +67,13 @@ function createUnitSpreadsheet_(name) {
   notices.setColumnWidth(3, 420);
   createDashboardSheet_(ss);
   return ss;
+}
+
+/**
+ * 権限の許可だけを行う。何も書き換えない。
+ * エディタでこの関数を実行すると、appsscript.json に書いた権限すべての許可の画面が出る。
+ */
+function authorize() {
+  DriveApp.getRootFolder().getName();
+  Logger.log('許可されています：' + userEmail_());
 }

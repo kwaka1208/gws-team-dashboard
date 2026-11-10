@@ -10,12 +10,13 @@ DEPLOY_ID =
 # APP_VERSION（const APP_VERSION = "v1.0";）を書いているファイル
 VERSION_FILE = src/config.js
 
-.PHONY: help login push pull open container app create-deploy deploy version release test preview
+.PHONY: help login push push-force pull open container app create-deploy deploy version release test preview
 
 # 使えるコマンドの一覧（make だけで実行したときもこれ）
 help:
 	@echo "make login                  clasp にログイン"
 	@echo "make push                   スクリプトをクラウドに反映"
+	@echo "make push-force             appsscript.json（権限など）も確認なしで上書きして反映"
 	@echo "make pull                   クラウドのスクリプトをローカルに取り込み"
 	@echo "make open                   スクリプトのエディタを開く"
 	@echo "make container              コンテナ（スプレッドシートなど）を開く ※コンテナバインドのとき"
@@ -34,6 +35,10 @@ login:
 # スクリプトをクラウドに反映
 push:
 	$(COMMAND) push
+
+# appsscript.json（権限など）も確認なしで上書きして反映（権限を増やしたとき）
+push-force:
+	$(COMMAND) push --force
 
 # クラウドのスクリプトをローカルに取り込み
 pull:

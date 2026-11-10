@@ -13,6 +13,8 @@
 function flowError_(message, err) {
   console.error(message + ' / ' + (err && err.stack ? err.stack : err));
   const detail = err && err.message ? String(err.message).slice(0, 200) : '';
+  // 権限の許可が足りないときは、フォルダの共有ではなく許可の問題なので、その案内を出す
+  if (/googleapis\.com\/auth\//.test(detail)) return new UserError(AUTH_HELP + '［詳細：' + detail + '］');
   return new UserError(detail ? message + '［詳細：' + detail + '］' : message);
 }
 
