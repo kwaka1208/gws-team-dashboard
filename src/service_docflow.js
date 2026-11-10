@@ -9,6 +9,13 @@
  *   提出・承認・差し戻し・拒否の経緯は、ドキュメントのコメントにも書き込む（やり取りと一緒に残る）
  */
 
+/** 利用者に見せるエラー。Google から返ったもとのエラー文も添える（原因を確かめられるように） */
+function flowError_(message, err) {
+  console.error(message + ' / ' + (err && err.stack ? err.stack : err));
+  const detail = err && err.message ? String(err.message).slice(0, 200) : '';
+  return new UserError(detail ? message + '［詳細：' + detail + '］' : message);
+}
+
 const DOCFLOW = {
   statuses: [
     { key: 'draft', folder: '提出前' },
@@ -101,20 +108,21 @@ function statusFolders_(folderId, create) {
       includeItemsFromAllDrives: true,
     });
   } catch (err) {
-    throw new UserError('保存先のフォルダを開けません（フォルダが共有されているか確認してください）');
+    throw flowError_('保存先のフォルダを開けません（フォルダが共有されているか確認してください）', err);
   }
   const byName = {};
   (list.files || []).forEach(function (f) { if (!(f.name in byName)) byName[f.name] = f.id; });
   const out = {};
+  let parent = null;
   DOCFLOW.statuses.forEach(function (s) {
     if (byName[s.folder]) {
       out[s.key] = byName[s.folder];
     } else if (create) {
       try {
-        out[s.key] = Drive.Files.create({ name: s.folder, mimeType: DOCFLOW.folderMime, parents: [folderId] }, null,
-          { supportsAllDrives: true, fields: 'id' }).id;
+        parent = parent || DriveApp.getFolderById(folderId);
+        out[s.key] = parent.createFolder(s.folder).getId();
       } catch (err) {
-        throw new UserError('保存先のフォルダに書き込めません（フォルダの編集者である必要があります）');
+        throw flowError_('保存先のフォルダに「' + s.folder + '」フォルダを作れません（フォルダの編集者である必要があります）', err);
       }
     }
   });
@@ -257,17 +265,20 @@ function docflowCreate_(ref, templateId, subject) {
     '作成者': me.split('@')[0],
     '日付': Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd'),
   });
-  let file;
+  let template;
   try {
-    file = Drive.Files.copy({
-      name: name,
-      parents: [folders.draft],
-      appProperties: { pdFlow: '1', pdCreator: me, pdTemplate: t.id },
-    }, t.docId, { supportsAllDrives: true, fields: 'id,name,webViewLink' });
+    template = DriveApp.getFileById(t.docId);
   } catch (err) {
-    throw new UserError('テンプレート「' + t.name + '」をコピーできません（テンプレートを閲覧でき、保存先フォルダを編集できる必要があります）');
+    throw flowError_('テンプレート「' + t.name + '」を開けません（テンプレートを閲覧できるように共有してください）', err);
   }
-  return { id: file.id, name: file.name, url: file.webViewLink || ('https://docs.google.com/document/d/' + file.id + '/edit') };
+  let copy;
+  try {
+    copy = template.makeCopy(name, DriveApp.getFolderById(folders.draft));
+  } catch (err) {
+    throw flowError_('テンプレート「' + t.name + '」をコピーできません（保存先フォルダを編集できる必要があります）', err);
+  }
+  setFlowProps_(copy.getId(), { pdFlow: '1', pdCreator: me, pdTemplate: t.id });
+  return { id: copy.getId(), name: copy.getName(), url: copy.getUrl() };
 }
 
 function getFlowFile_(fileId, folders) {
@@ -276,7 +287,7 @@ function getFlowFile_(fileId, folders) {
   try {
     file = Drive.Files.get(String(fileId), { fields: 'id,name,webViewLink,parents,appProperties', supportsAllDrives: true });
   } catch (err) {
-    throw new UserError('書類を開けません（削除されたか、権限がない可能性があります）');
+    throw flowError_('書類を開けません（削除されたか、権限がない可能性があります）', err);
   }
   const status = statusOfParents_(file.parents, folders);
   if (!status) throw new UserError('この書類は、このウィジェットの保存先にありません');
@@ -285,18 +296,23 @@ function getFlowFile_(fileId, folders) {
   return file;
 }
 
+/** ファイルに記録（appProperties）を書き込む */
+function setFlowProps_(fileId, props) {
+  try {
+    Drive.Files.update({ appProperties: props }, fileId, null, { supportsAllDrives: true, fields: 'id' });
+  } catch (err) {
+    throw flowError_('書類に記録を書き込めません（書類の編集者である必要があります）', err);
+  }
+}
+
 /** 書類をステータスのフォルダへ移し、記録を書き込む */
 function moveFlowFile_(file, folders, to, props) {
   try {
-    Drive.Files.update({ appProperties: props || {} }, file.id, null, {
-      addParents: folders[to],
-      removeParents: (file.parents || []).join(','),
-      supportsAllDrives: true,
-      fields: 'id',
-    });
+    DriveApp.getFileById(file.id).moveTo(DriveApp.getFolderById(folders[to]));
   } catch (err) {
-    throw new UserError('書類を移動できません（保存先フォルダの編集者である必要があります）');
+    throw flowError_('書類を移動できません（保存先フォルダの編集者である必要があります）', err);
   }
+  if (props) setFlowProps_(file.id, props);
 }
 
 /** ドキュメントにコメントを残す（経緯の記録。失敗しても処理は続ける） */
