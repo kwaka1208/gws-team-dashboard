@@ -1,0 +1,4267 @@
+<script>
+/* converted from js/app.js */
+(function () {
+"use strict";
+/**
+ * app.js — ダッシュボードの画面
+ *
+ * 状態（state）を 1 つの JSON で持ち、変更のたびに画面を描き直して保存します。
+ * 並べ替えには SortableJS（public/vendor/Sortable.min.js）を使っています。
+ * アドオン（自作ウィジェット）の組み込みは、このファイルの末尾にあります（作り方は WIDGET.md）。
+ *
+ * データ形式（default-dashboard.json も同じ形）:
+ * {
+ *   "version": 2,
+ *   "title": "Dashboard",
+ *   "pages": [ { "id": "...", "name": "ホーム", "widgets": [ ...下の widgets と同じ... ] } ],
+ *   （version 1 の形式：pages の代わりに widgets だけを持つ。読み込むと「ホーム」タブ 1 つになる）
+ *   "settings": { "mode": "auto", "preset": "", "density": "normal", "layout": "tile",
+ *                 "openInNewTab": true, "useFavicons": true },
+ *   "widgets": [
+ *     （各ウィジェットは "rows": 1〜4 で高さ（段数）を持つ。省略時は種類ごとの初期値）
+ *     { "id": "...", "type": "links", "title": "...", "size": "m", "rows": 2, "view": "list",
+ *       "accent": "#2f6f5e", "items": [ { "id": "...", "title": "...", "url": "...", "icon": "", "description": "" } ] },
+ *     { "id": "...", "type": "note",   "title": "...", "size": "s", "text": "" },
+ *     { "id": "...", "type": "clock",  "title": "...", "size": "s", "timeZone": "" },
+ *     { "id": "...", "type": "search", "title": "...", "size": "m", "searchUrl": "https://www.google.com/search?q=%s" },
+ *     { "id": "...", "type": "embed",  "title": "...", "size": "l", "embedUrl": "https://...", "height": 400 },
+ *     { "id": "...", "type": "todo",   "title": "...", "size": "m",
+ *       "categories": [ { "id": "...", "name": "仕事" } ],
+ *       "items": [ { "id": "...", "text": "...", "done": false, "categoryId": "..." } ] }
+ *   ]
+ * }
+ */
+const { THEME_PRESETS, FAVICON_URL, SAVE_DELAY_MS } = PD.config;
+const storage = PD.storage;
+const { toYouTubeEmbed, toImageUrl } = PD.embed;
+const { CALENDAR_SCOPE, GMAIL_SCOPE, fetchCalendarEvents, fetchGmailUnread } = PD.google;
+const { GITHUB_LISTS, describeWeather, fetchGitHub, fetchWeather, geocode } = PD.services;
+const { addons } = PD.addon_api;
+const { LANGUAGES, applyI18n, language, locale, localized, setLanguage, t } = PD.i18n;
+/** ウィジェットの種類 → 表示名のキー（locales/*.js）。アドオンの種類は installAddon() で足す */
+const WIDGET_TYPES = {
+  notice: "widget.notice",
+  links: "widget.links",
+  note: "widget.note",
+  clock: "widget.clock",
+  search: "widget.search",
+  embed: "widget.embed",
+  todo: "widget.todo",
+  photo: "widget.photo",
+  calendar: "widget.calendar",
+  mail: "widget.mail",
+  weather: "widget.weather",
+  timer: "widget.timer",
+  worldclock: "widget.worldclock",
+  habit: "widget.habit",
+  github: "widget.github",
+  yamato: "widget.yamato",
+};
+const DEFAULT_TODO_CATEGORIES = ["todo.category.work", "todo.category.private"]; // 文言のキー
+/** ウィジェットの高さ（段数）の選択肢と、種類ごとの初期値 */
+const ROW_OPTIONS = [1, 2, 3, 4];
+const DEFAULT_ROWS = {
+  notice: 3, links: 2, note: 2, clock: 1, search: 1, embed: 2, todo: 3, photo: 2, calendar: 3, mail: 1,
+  weather: 2, timer: 2, worldclock: 2, habit: 2, github: 3, yamato: 2,
+};
+/** Google の API を使うウィジェット */
+const GOOGLE_WIDGETS = ["calendar", "mail"];
+/** 外部から読み込んで、一定時間ごとに読み込み直すウィジェット */
+const REMOTE_WIDGETS = ["calendar", "mail", "weather", "github"];
+const CALENDAR_DAYS = [1, 3, 7, 14];
+const MAIL_LABELS = {
+  INBOX: { name: "mail.label.inbox", hash: "inbox" },
+  CATEGORY_PERSONAL: { name: "mail.label.personal", hash: "inbox" },
+  IMPORTANT: { name: "mail.label.important", hash: "imp" },
+  STARRED: { name: "mail.label.starred", hash: "starred" },
+};
+/** 写真のスライドショーの切り替え間隔（秒）の選択肢。0 は切り替えない */
+const PHOTO_INTERVALS = [0, 5, 10, 30, 60, 300];
+
+const SIZES = ["s", "m", "l", "xl"];
+const SIZE_NAMES = { s: "S", m: "M", l: "L", xl: "XL" };
+
+/**
+ * 種類ごとの最小サイズ（これより小さいと中身が使いにくいもの）。書いていない種類は S・1 段。
+ * 編集画面ではこれより小さい大きさを選べず、読み込むときもここまで広げる。
+ */
+const MIN_SIZE = {
+  links: { rows: 1 },
+  todo: { size: "m", rows: 2 },      // 幅 S だと入力欄が狭すぎる
+  embed: { rows: 2 },                // 1 段だと動画やカレンダーが小さすぎる
+  calendar: { rows: 2 },
+  timer: { rows: 2 },                // 1 段だと開始ボタンが隠れる
+  habit: { size: "m", rows: 2 },     // 習慣 × 日付の表
+  github: { rows: 2 },
+};
+
+/** 高さ（段数）を固定する種類。1 行で使うものは、段を増やしても空白が増えるだけなので選べなくする */
+const FIXED_ROWS = { search: 1, mail: 1 };
+
+function minSizeOf(type) {
+  return { size: "s", rows: 1, ...(MIN_SIZE[type] || {}) };
+}
+
+/** 幅を最小サイズ以上にそろえる */
+function clampSize(size, type) {
+  const min = SIZES.indexOf(minSizeOf(type).size);
+  const index = SIZES.indexOf(size);
+  return SIZES[Math.max(index < 0 ? 1 : index, min)];
+}
+
+/** 高さ（段数）を選択肢の中で、最小サイズ以上にそろえる */
+function normalizeRows(value, type) {
+  if (FIXED_ROWS[type]) return FIXED_ROWS[type];
+  const rows = Number(value);
+  const valid = ROW_OPTIONS.includes(rows) ? rows : DEFAULT_ROWS[type] || 2;
+  return Math.max(valid, minSizeOf(type).rows);
+}
+const DEFAULT_SETTINGS = {
+  language: "auto", // "auto"：ブラウザの言語に合わせる / "ja" / "en" …（i18n.js の LANGUAGES）
+  mode: "auto",
+  preset: "",
+  density: "normal",
+  layout: "tile", // "tile"：段で高さを指定してタイル状に並べる / "flow"：中身の高さに合わせる
+  openInNewTab: true,
+  useFavicons: true,
+  autoRenewGoogle: false, // カレンダー・Gmail の連携を、画面を操作したときに自動で延長する（ポップアップが一瞬開くので初期値はオフ）
+};
+const DEFAULT_SEARCH_URL = "https://www.google.com/search?q=%s";
+
+const $ = (sel, root = document) => root.querySelector(sel);
+const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
+
+const el = {
+  root: document.documentElement,
+  title: $("#dashboard-title"),
+  dashboard: $("#dashboard"),
+  tabs: $("#tabs"),
+  filter: $("#filter"),
+  editToggle: $("#edit-toggle"),
+  settingsOpen: $("#settings-open"),
+  modeToggle: $("#mode-toggle"),
+  sharedBadge: $("#shared-badge"),
+  saveStatus: $("#save-status"),
+  banner: $("#banner"),
+  userEmail: $("#user-email"),
+  headerSearch: $("#header-search"),
+  headerActions: $("#header-actions"),
+  signin: $("#signin"),
+  signinButton: $("#signin-button"),
+  signoutButton: $("#signout-button"),
+  widgetDialog: $("#widget-dialog"),
+  widgetForm: $("#widget-form"),
+  widgetDelete: $("#widget-delete"),
+  linkDialog: $("#link-dialog"),
+  linkForm: $("#link-form"),
+  linkDelete: $("#link-delete"),
+  settingsDialog: $("#settings-dialog"),
+  settingsForm: $("#settings-form"),
+  themePicker: $("#theme-picker"),
+  exportButton: $("#export-button"),
+  importInput: $("#import-input"),
+  resetButton: $("#reset-button"),
+  textDialog: $("#text-dialog"),
+  textForm: $("#text-form"),
+  toast: $("#toast"),
+};
+
+let state = null;
+let storageMode = "local";
+/** 編集モード（ヘッダーの「編集」）。実際に編集できるかは、タブごとに editing で決まる */
+let editMode = false;
+/** 今のタブを編集できる状態か（編集モードで、そのタブを編集できるとき） */
+let editing = false;
+let sortables = [];
+let saveTimer = null;
+let clockTimer = null;
+/** ToDo ウィジェットごとに選んでいるカテゴリー（保存しない表示状態） */
+const todoFilters = new Map();
+/** 描き直したあとにフォーカスを戻す要素のセレクター */
+let focusAfterRender = null;
+
+/* ================================================================== */
+/* ユーティリティ                                                       */
+/* ================================================================== */
+
+function uid() {
+  return crypto.randomUUID ? crypto.randomUUID().slice(0, 8) : Math.random().toString(36).slice(2, 10);
+}
+
+function h(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [key, value] of Object.entries(attrs)) {
+    if (value == null || value === false) continue;
+    if (key === "class") node.className = value;
+    else if (key === "dataset") Object.assign(node.dataset, value);
+    else if (key === "style") Object.assign(node.style, value);
+    else if (key.startsWith("on")) node.addEventListener(key.slice(2), value);
+    else node.setAttribute(key, value === true ? "" : value);
+  }
+  for (const child of children.flat()) {
+    if (child == null || child === false) continue;
+    node.append(child instanceof Node ? child : document.createTextNode(String(child)));
+  }
+  return node;
+}
+
+/** javascript: などを弾き、http(s) と一部のスキームだけ通す */
+function safeUrl(value) {
+  try {
+    const url = new URL(String(value).trim());
+    return ["http:", "https:", "mailto:", "tel:"].includes(url.protocol) ? url.href : null;
+  } catch {
+    return null;
+  }
+}
+
+function hostname(url) {
+  try {
+    return new URL(url).hostname.replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+function isHexColor(value) {
+  return typeof value === "string" && /^#[0-9a-f]{6}$/i.test(value);
+}
+
+/**
+ * 言語ごとに書いた文字 { "ja": "…", "en": "…" } を、今の言語の文字にする。
+ * default-dashboard.json の見出しなどで使う（保存するときは選んだ言語の文字になる）
+ */
+function localText(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? localized(value) : value;
+}
+
+/** 読み込んだデータを補正する（古い形式や手で書いた JSON への備え） */
+function normalize(data) {
+  const out = {
+    version: 2,
+    title: typeof localText(data?.title) === "string" ? localText(data.title) : "Dashboard",
+    settings: { ...DEFAULT_SETTINGS, ...(data?.settings || {}) },
+    pages: [],
+  };
+  // 旧バージョンの「コンパクト」テーマは表示密度の設定に移した
+  if (out.settings.preset === "compact") {
+    out.settings.preset = "";
+    out.settings.density = "compact";
+  }
+  if (!THEME_PRESETS.some((p) => p.id === out.settings.preset)) out.settings.preset = "";
+  if (out.settings.layout !== "flow") out.settings.layout = "tile";
+  if (!LANGUAGES.some((l) => l.id === out.settings.language)) out.settings.language = "auto";
+  if (!["auto", "light", "dark"].includes(out.settings.mode)) out.settings.mode = "auto";
+  delete out.settings.alignRows; // 旧バージョンの設定（layout に置き換え）
+
+  // タブ。旧形式（widgets だけ）は「ホーム」タブ 1 つにまとめる
+  const pages = Array.isArray(data?.pages) && data.pages.length
+    ? data.pages
+    : [{ id: "home", name: t("tab.home"), widgets: data?.widgets }];
+  for (const p of pages) {
+    if (!p || typeof p !== "object") continue;
+    out.pages.push({
+      id: p.id ? String(p.id) : uid(),
+      name: typeof localText(p.name) === "string" && localText(p.name).trim() ? localText(p.name) : t("tab.untitled"),
+      widgets: (Array.isArray(p.widgets) ? p.widgets : []).map(normalizeWidget).filter(Boolean),
+      ...(p.unit ? { unit: String(p.unit) } : {}),
+    });
+  }
+  if (out.pages.length === 0) out.pages.push({ id: uid(), name: t("tab.home"), widgets: [] });
+  return out;
+}
+
+/** ウィジェット 1 つ分の補正 */
+function normalizeWidget(w) {
+  if (!w || typeof w !== "object" || typeof w.type !== "string" || !w.type) return null;
+  // 知らない種類（アドオンを外した・まだ読み込めていないなど）は、データを消さずにそのまま残す
+  const widget = {
+    ...w,
+    id: w.id ? String(w.id) : uid(),
+    title: typeof localText(w.title) === "string" ? localText(w.title) : "",
+    size: clampSize(w.size, w.type),
+    rows: normalizeRows(w.rows, w.type),
+  };
+  if (widget.type === "links") {
+    widget.view = widget.view === "grid" ? "grid" : "list";
+    widget.items = (Array.isArray(w.items) ? w.items : [])
+      .filter((item) => item && safeUrl(item.url))
+      .map((item) => ({ ...item, title: localText(item.title), id: item.id ? String(item.id) : uid() }));
+  }
+  if (widget.type === "todo") {
+    widget.categories = (Array.isArray(w.categories) ? w.categories : [])
+      .filter((c) => c && typeof localText(c.name) === "string")
+      .map((c) => ({ id: c.id ? String(c.id) : uid(), name: localText(c.name) }));
+    const categoryIds = new Set(widget.categories.map((c) => c.id));
+    widget.items = (Array.isArray(w.items) ? w.items : [])
+      .filter((item) => item && typeof item.text === "string" && categoryIds.has(String(item.categoryId)))
+      .map((item) => ({
+        id: item.id ? String(item.id) : uid(),
+        text: item.text,
+        done: Boolean(item.done),
+        categoryId: String(item.categoryId),
+      }));
+  }
+  if (widget.type === "photo") {
+    widget.photos = (Array.isArray(w.photos) ? w.photos : [])
+      .filter((ph) => ph && toImageUrl(ph.url))
+      .map((ph) => ({
+        id: ph.id ? String(ph.id) : uid(),
+        url: toImageUrl(ph.url),
+        caption: typeof ph.caption === "string" ? ph.caption : "",
+      }));
+    widget.fit = widget.fit === "contain" ? "contain" : "cover";
+    widget.interval = PHOTO_INTERVALS.includes(Number(w.interval)) ? Number(w.interval) : 10;
+  }
+  if (widget.type === "calendar") {
+    widget.days = CALENDAR_DAYS.includes(Number(w.days)) ? Number(w.days) : 3;
+    widget.allCalendars = w.allCalendars !== false;
+  }
+  WIDGET_FORMS[widget.type]?.normalize?.(widget);
+  if (widget.type === "mail") {
+    widget.label = MAIL_LABELS[w.label] ? w.label : "INBOX";
+  }
+  return widget;
+}
+
+/* ================================================================== */
+/* タブ                                                                 */
+/* ================================================================== */
+
+const ACTIVE_TAB_KEY = "personal-dashboard:active-tab";
+let activePageId = null;
+
+/** いま表示しているタブ */
+function page() {
+  return state.pages.find((p) => p.id === activePageId) || state.pages[0];
+}
+
+/** そのタブを編集できるか（組織のタブは、組織のスプレッドシートの編集者だけ） */
+function canEditPage(p) {
+  return !p.unit || storage.canEditUnit(p.unit);
+}
+
+/** 自分のタブ */
+function personalPages() {
+  return state.pages.filter((p) => !p.unit);
+}
+
+/** 同じ持ち主（自分・同じ組織）のタブ */
+function siblingPages(p) {
+  return state.pages.filter((x) => (x.unit || "") === (p.unit || ""));
+}
+
+/** いま表示しているタブのウィジェット */
+function widgets() {
+  return page().widgets;
+}
+
+/*
+ * URL の # の後ろには、タブの名前を入れる（例：…/#ホーム）。
+ * 同じ名前のタブが複数あるときは、2 つ目から「名前-2」「名前-3」…。
+ * 以前のブックマーク（# の後ろがタブの ID）も、そのまま開ける。
+ */
+function pageSlug(target) {
+  const base = (target.name || "").trim().replace(/\s+/g, "-") || target.id;
+  let n = 0;
+  for (const p of state.pages) {
+    if (((p.name || "").trim().replace(/\s+/g, "-") || p.id) === base) n += 1;
+    if (p === target) break;
+  }
+  return n > 1 ? `${base}-${n}` : base;
+}
+
+/** URL の # の後ろ（タブの名前・ID）から、タブの ID を探す */
+function pageIdFromHash(hash = location.hash) {
+  let key = hash.replace(/^#/, "");
+  try { key = decodeURIComponent(key); } catch { /* そのまま */ }
+  if (!key) return null;
+  return state.pages.find((p) => pageSlug(p) === key)?.id
+    || state.pages.find((p) => p.id === key)?.id
+    || null;
+}
+
+/** 今のタブを URL の # に入れる */
+function updatePageHash() {
+  const slug = pageSlug(page());
+  let current = location.hash.slice(1);
+  try { current = decodeURIComponent(current); } catch { /* そのまま */ }
+  if (current === slug) return;
+  history.replaceState(null, "", `#${encodeURIComponent(slug)}`);
+}
+
+/** 開くタブを決める：URL の #タブ名 → この端末で最後に開いたタブ → 先頭 */
+function pickInitialPage() {
+  let remembered = null;
+  try { remembered = localStorage.getItem(ACTIVE_TAB_KEY); } catch { /* 使えない環境 */ }
+  const found = pageIdFromHash() || (state.pages.some((p) => p.id === remembered) ? remembered : null);
+  activePageId = found || state.pages[0].id;
+  // 以前の形（# の後ろが ID）で開いたときは、名前の形に書き換えておく
+  if (location.hash) updatePageHash();
+}
+
+function switchPage(id, { updateHash = true } = {}) {
+  if (!state.pages.some((p) => p.id === id)) return;
+  activePageId = id;
+  try { localStorage.setItem(ACTIVE_TAB_KEY, id); } catch { /* 使えない環境 */ }
+  if (updateHash) updatePageHash();
+  el.filter.value = "";
+  render();
+}
+
+window.addEventListener("hashchange", () => {
+  if (!state) return;
+  const id = pageIdFromHash();
+  if (!id) return;
+  if (id !== activePageId) switchPage(id); // 以前の形（ID）で来たときは、名前の形に書き換わる
+  else updatePageHash();
+});
+
+function renderTabs() {
+  const show = state.pages.length > 1 || editMode;
+  el.tabs.hidden = !show;
+  if (!show) {
+    el.tabs.replaceChildren();
+    return;
+  }
+  const list = h("div", { class: "tabs__list", role: "tablist", "aria-label": t("tab.untitled") });
+  let lastUnit = null;
+  for (const p of state.pages) {
+    // 組織のタブと自分のタブの間に区切りを入れる
+    if (lastUnit !== null && Boolean(lastUnit) !== Boolean(p.unit)) list.append(h("span", { class: "tabs__divider", "aria-hidden": "true" }));
+    lastUnit = p.unit || "";
+    const selected = p.id === page().id;
+    const unit = p.unit ? storage.unitById(p.unit) : null;
+    const editable = canEditPage(p);
+    const tools = editMode ? h("span", { class: "tab-item__tools" },
+      editable ? h("button", {
+        type: "button",
+        class: "button button--small button--ghost",
+        title: t("common.rename"),
+        "aria-label": t("tab.renameAria", { name: p.name }),
+        onclick: () => renamePage(p),
+      }, "✎") : null,
+      h("button", {
+        type: "button",
+        class: "button button--small button--ghost",
+        title: editable ? t("tab.duplicate") : t("org.copyToMine"),
+        "aria-label": t("tab.duplicateAria", { name: p.name }),
+        onclick: () => duplicatePage(p),
+      }, "⧉"),
+      editable && siblingPages(p).length > 1 ? h("button", {
+        type: "button",
+        class: "button button--small button--ghost button--danger",
+        title: t("tab.delete"),
+        "aria-label": t("tab.deleteAria", { name: p.name }),
+        onclick: () => deletePage(p),
+      }, "×") : null,
+    ) : null;
+    const item = h("div", { class: `tab-item${unit ? " tab-item--org" : ""}`, dataset: { pageId: p.id } },
+      unit ? null : h("span", { class: "tab-item__handle", title: t("tab.dragHandle"), "aria-hidden": "true" }, "⠿"),
+      h("button", {
+        type: "button",
+        class: "tab",
+        role: "tab",
+        "aria-selected": String(selected),
+        tabindex: selected ? "0" : "-1",
+        title: unit ? t(unit.canEdit ? "org.tabTitleEditable" : "org.tabTitle", { name: unit.name }) : null,
+        onclick: () => switchPage(p.id),
+        onkeydown: (event) => moveTabFocus(event, p.id),
+      }, unit ? h("span", { class: "tab__org-mark", "aria-hidden": "true" }, unit.canEdit ? "✦" : "🔒") : null, p.name),
+      tools,
+    );
+    list.append(item);
+  }
+  // 「＋ タブを追加」は、いちばん右のタブのすぐ右に置く
+  el.tabs.replaceChildren(list);
+  if (editMode) {
+    el.tabs.append(h("button", { type: "button", class: "tabs__add", onclick: () => addPage(null) }, t("tab.add")));
+    const current = page();
+    if (current.unit && canEditPage(current)) {
+      const unit = storage.unitById(current.unit);
+      el.tabs.append(h("button", { type: "button", class: "tabs__add", onclick: () => addPage(current.unit) },
+        t("org.addTab", { name: unit.name })));
+    }
+  }
+}
+
+/**
+ * タブを複製する。ウィジェットは中身ごとコピーし、ID だけ新しくする
+ * （タイマーの状態や読み込みの控えなど、ウィジェットの ID で区別しているものが混ざらないように）。
+ * 複製したタブは元のタブのすぐ右に入れて、開く。
+ */
+function duplicatePage(p) {
+  const names = new Set(state.pages.map((x) => x.name));
+  let name = t("tab.copyName", { name: p.name });
+  for (let n = 2; names.has(name); n += 1) name = t("tab.copyNameN", { name: p.name, n });
+  const copy = {
+    id: uid(),
+    name,
+    widgets: JSON.parse(JSON.stringify(p.widgets)).map((w) => ({ ...w, id: uid() })),
+  };
+  // 編集できる組織のタブは同じ組織の中に、それ以外（閲覧のみの組織のタブ）は自分のタブとして複製する
+  if (p.unit && canEditPage(p)) {
+    copy.unit = p.unit;
+    state.pages.splice(state.pages.findIndex((x) => x.id === p.id) + 1, 0, copy);
+  } else if (p.unit) {
+    state.pages.push(copy);
+  } else {
+    state.pages.splice(state.pages.findIndex((x) => x.id === p.id) + 1, 0, copy);
+  }
+  scheduleSave();
+  switchPage(copy.id);
+  showToast(t("tab.duplicated", { name: p.name }));
+}
+
+/** 矢印キーでタブを移動（WAI-ARIA のタブの操作） */
+function moveTabFocus(event, id) {
+  const index = state.pages.findIndex((p) => p.id === id);
+  let next = null;
+  if (event.key === "ArrowRight") next = state.pages[(index + 1) % state.pages.length];
+  if (event.key === "ArrowLeft") next = state.pages[(index - 1 + state.pages.length) % state.pages.length];
+  if (event.key === "Home") next = state.pages[0];
+  if (event.key === "End") next = state.pages[state.pages.length - 1];
+  if (!next) return;
+  event.preventDefault();
+  switchPage(next.id);
+  $(`.tab-item[data-page-id="${CSS.escape(next.id)}"] .tab`, el.tabs)?.focus();
+}
+
+/** タブを足す。unitId を渡すと、その組織のタブとして（その組織の最後に）足す */
+async function addPage(unitId = null) {
+  if (unitId && !storage.canEditUnit(unitId)) return;
+  const name = await askText({ title: t("tab.addTitle"), label: t("tab.nameLabel"), value: "" });
+  if (!name) return;
+  const p = { id: uid(), name, widgets: [] };
+  if (unitId) {
+    p.unit = unitId;
+    const lastIndex = state.pages.map((x) => x.unit).lastIndexOf(unitId);
+    state.pages.splice(lastIndex + 1, 0, p);
+  } else {
+    state.pages.push(p);
+  }
+  scheduleSave();
+  switchPage(p.id);
+}
+
+async function renamePage(p) {
+  const name = await askText({ title: t("tab.renameTitle"), label: t("tab.nameLabel"), value: p.name });
+  if (!name) return;
+  p.name = name;
+  commit();
+  if (p.id === activePageId) updatePageHash(); // URL の # もタブの新しい名前に
+}
+
+function deletePage(p) {
+  // 自分のタブ・各組織のタブは、それぞれ 1 つは残す
+  if (!canEditPage(p) || siblingPages(p).length <= 1) return;
+  const count = p.widgets.length;
+  const extra = count ? t("tab.deleteConfirmWidgets", { n: count }) : "";
+  if (!confirm(t("tab.deleteConfirm", { name: p.name }) + extra)) return;
+  state.pages = state.pages.filter((x) => x.id !== p.id);
+  if (activePageId === p.id) {
+    activePageId = state.pages[0].id;
+    updatePageHash();
+  }
+  commit();
+}
+
+// Alt（Mac は option）＋数字キーでタブを切り替え
+document.addEventListener("keydown", (event) => {
+  if (!state || !event.altKey || event.ctrlKey || event.metaKey) return;
+  const n = Number((event.code || "").replace("Digit", ""));
+  if (!n || n > state.pages.length || document.querySelector("dialog[open]")) return;
+  event.preventDefault();
+  switchPage(state.pages[n - 1].id);
+});
+
+/* ================================================================== */
+/* 保存                                                                 */
+/* ================================================================== */
+
+function setStatus(text, stateName = "") {
+  el.saveStatus.textContent = text;
+  el.saveStatus.dataset.state = stateName;
+}
+
+function showBanner(message, kind = "error") {
+  el.banner.textContent = message;
+  el.banner.dataset.kind = kind;
+  el.banner.hidden = !message;
+}
+
+function scheduleSave() {
+  setStatus(t("status.pending"));
+  clearTimeout(saveTimer);
+  saveTimer = setTimeout(saveNow, SAVE_DELAY_MS);
+}
+
+async function saveNow() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  if (!state) return;
+  setStatus(t("status.saving"));
+  saving = true;
+  try {
+    const result = await storage.save(forSaving(state), storageMode, mergeDashboards);
+    saving = false;
+    setStatus(storageMode === "remote" ? t("status.saved") : t("status.savedLocal"));
+    // ほかの人（端末）の変更とまとめて保存したときは、まとめた内容を画面にも反映する
+    if (result) applyRemote(result.merged, result.json, { merged: true });
+    // 編集できない組織のタブを変えようとしたときは、元に戻したことを知らせる
+    if (result?.reverted) showToast(t("org.reverted"));
+    // 保存中に届いた変更は、保存のあとで読み直して反映する（保存の途中で画面を入れ替えると、まとめ方が狂うため）
+    if (remoteDuringSave) {
+      remoteDuringSave = false;
+      const latest = await storage.fetchLatest().catch(() => null);
+      if (latest) applyRemote(latest.data, latest.json);
+    }
+  } catch (err) {
+    setStatus(t("status.failed"), "error");
+    showBanner(err.message);
+  } finally {
+    saving = false;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* ほかの人（ほかの端末）の変更を反映する                                   */
+/* ------------------------------------------------------------------ */
+/*
+ * Firestore のダッシュボードが変わると storage.watch() から届く。
+ * 共有（SHARED_DASHBOARD）のときはほかの人の編集、そうでなくても別の端末での編集が、そのまま画面に反映される。
+ * 同じときに 2 人が編集した場合は、後から保存したほうの内容になる。
+ */
+let pendingRemote = null; // { data, json, merged }
+let saving = false; // 保存の途中か
+let remoteDuringSave = false; // 保存の途中に、ほかの人の変更が届いたか
+let remoteRetry = null;
+
+/**
+ * 3 方向のまとめ：もと（base）から自分（local）とほかの人（remote）がそれぞれ変えた内容を 1 つにする。
+ * ウィジェット・タブ・設定の項目ごとに、自分が変えたものは自分の内容、変えていないものはほかの人の内容を使う。
+ * 追加はどちらのものも残し、削除は相手がその間に変えていなければ消す。
+ */
+function mergeDashboards(base, local, remote) {
+  const key = (v) => JSON.stringify(v ?? null);
+  const pick = (b, l, r) => (key(l) === key(b) ? r : l);
+  const byId = (list) => new Map((Array.isArray(list) ? list : []).map((x) => [x.id, x]));
+
+  /** id を持つものの一覧をまとめる（並び順は、自分が並べ替えていれば自分、そうでなければほかの人） */
+  function mergeList(bList, lList, rList, mergeItem) {
+    const b = byId(bList), l = byId(lList), r = byId(rList);
+    const ids = (a) => (Array.isArray(a) ? a.map((x) => x.id) : []);
+    const order = key(ids(lList)) !== key(ids(bList)) ? ids(lList) : ids(rList);
+    for (const id of [...ids(lList), ...ids(rList)]) if (!order.includes(id)) order.push(id);
+    const out = [];
+    for (const id of order) {
+      const bi = b.get(id), li = l.get(id), ri = r.get(id);
+      if (li && ri) out.push(mergeItem ? mergeItem(bi, li, ri) : pick(bi, li, ri));
+      else if (li) { if (!bi || key(li) !== key(bi)) out.push(li); } // ほかの人が消した：自分が変えていなければ消す
+      else if (ri) { if (!bi || key(ri) !== key(bi)) out.push(ri); } // 自分が消した：ほかの人が変えていなければ消す
+    }
+    return out;
+  }
+
+  const settings = { ...remote.settings };
+  for (const k of new Set([...Object.keys(local.settings || {}), ...Object.keys(remote.settings || {})])) {
+    settings[k] = pick(base.settings?.[k], local.settings?.[k], remote.settings?.[k]);
+  }
+  return {
+    ...remote,
+    title: pick(base.title, local.title, remote.title),
+    settings,
+    pages: mergeList(base.pages, local.pages, remote.pages, (b, l, r) => ({
+      ...r,
+      name: pick(b?.name, l.name, r.name),
+      widgets: mergeList(b?.widgets, l.widgets, r.widgets),
+    })),
+  };
+}
+
+/** 入力中・ダイアログ・ドラッグ中など、描き直すと操作の邪魔になるとき */
+function isBusy() {
+  if (document.querySelector("dialog[open], .is-resizing, .is-dragging, .is-chosen")) return true;
+  const active = document.activeElement;
+  return Boolean(active && el.dashboard.contains(active) && active.matches("input, textarea, select, [contenteditable]"));
+}
+
+function applyRemote(data, json, { merged = false } = {}) {
+  pendingRemote = { data, json, merged };
+  clearTimeout(remoteRetry);
+  if (!state) return;
+  if (saving && !merged) { pendingRemote = null; remoteDuringSave = true; return; }
+  // 自分の変更がまだ保存されていないときは、保存するときにまとめるので、ここでは何もしない
+  if (saveTimer) { pendingRemote = null; return; }
+  if (isBusy()) {
+    remoteRetry = setTimeout(() => applyRemote(pendingRemote.data, pendingRemote.json, pendingRemote), 1000);
+    return;
+  }
+  pendingRemote = null;
+  const next = withPersonal(normalize(data));
+  if (key(next) !== key(state)) {
+    const current = activePageId;
+    state = next;
+    if (state.pages.some((p) => p.id === current)) activePageId = current;
+    else pickInitialPage();
+    render();
+    if (location.hash) updatePageHash(); // ほかの人がタブの名前を変えたとき
+    setStatus(t("status.synced"));
+  }
+  storage.setBase(JSON.stringify(forSaving(state)));
+
+  function key(v) { return JSON.stringify(v); }
+}
+
+/* ------------------------------------------------------------------ */
+/* 人ごとの設定（共有中）：ライト / ダークと言語                             */
+/* ------------------------------------------------------------------ */
+
+/** 共有のダッシュボードを使っているか（このときライト / ダークと言語は人ごと） */
+function isPersonalMode() {
+  return storage.isShared && storageMode === "remote";
+}
+
+/** 共有のデータに入っている、ライト / ダークと言語の値（保存するときは、これを書き戻す） */
+let sharedPersonal = {};
+
+/** 読み込んだ（共有の）データに、この人のライト / ダークと言語を当てはめる */
+function withPersonal(data) {
+  if (!isPersonalMode()) return data;
+  sharedPersonal = Object.fromEntries(storage.PERSONAL_KEYS.map((k) => [k, data.settings[k]]));
+  const mine = storage.readPersonal();
+  for (const k of storage.PERSONAL_KEYS) if (mine[k] != null) data.settings[k] = mine[k];
+  // 自動延長は、本人がまだ選んでいなければオフ（共有のデータの値は使わない）
+  if (mine.autoRenewGoogle == null) data.settings.autoRenewGoogle = false;
+  return data;
+}
+
+/** 保存する内容：共有中は、ライト / ダークと言語を共有の値に戻す（この人の設定は共有しない） */
+function forSaving(data) {
+  if (!isPersonalMode()) return data;
+  return { ...data, settings: { ...data.settings, ...sharedPersonal } };
+}
+
+/** 変更を反映：描き直して保存 */
+function commit({ rerender = true } = {}) {
+  if (rerender) render();
+  scheduleSave();
+}
+
+window.addEventListener("beforeunload", (event) => {
+  if (saveTimer) {
+    saveNow();
+    event.preventDefault();
+  }
+});
+
+/* ================================================================== */
+/* 描画                                                                 */
+/* ================================================================== */
+
+function applySettings(settings = state.settings) {
+  const { mode, preset, density, layout } = settings;
+  if (setLanguage(settings.language)) onLanguageChanged();
+  if (layout === "flow") el.root.dataset.layout = "flow";
+  else delete el.root.dataset.layout;
+  if (mode === "light" || mode === "dark") el.root.dataset.mode = mode;
+  else delete el.root.dataset.mode;
+  if (preset) el.root.dataset.preset = preset;
+  else delete el.root.dataset.preset;
+  if (density === "compact") el.root.dataset.density = density;
+  else delete el.root.dataset.density;
+  if (state) {
+    el.title.textContent = state.title || "Dashboard";
+    document.title = state.title || "Dashboard";
+  }
+  updateModeToggle(settings);
+}
+
+/** 言語が変わったとき：HTML に書いた文言・テーマの見本・アドオンの欄を、新しい言語で作り直す */
+function onLanguageChanged() {
+  applyI18n();
+  renderThemePicker();
+  renderAddonForm();
+  if (state) $(".button__label", el.editToggle).textContent = editMode ? t("common.done") : t("common.edit");
+}
+
+/* ------------------------------------------------------------------ */
+/* ライト / ダークの切り替え（ヘッダーのボタンと D キー）                    */
+/* ------------------------------------------------------------------ */
+
+const darkQuery = window.matchMedia?.("(prefers-color-scheme: dark)");
+
+/** 今の見た目がダークか（「OS に合わせる」のときは OS の設定、常にダークのテーマはダーク） */
+function isDark(settings) {
+  if (settings.preset === "terminal") return true;
+  if (settings.mode === "dark" || settings.mode === "light") return settings.mode === "dark";
+  return Boolean(darkQuery?.matches);
+}
+
+/** 画面の外（ログイン前）でも使えるよう、今の設定を返す */
+function currentSettings() {
+  return state ? state.settings : { ...DEFAULT_SETTINGS, ...(storage.readAppearance() || {}) };
+}
+
+function updateModeToggle(settings = currentSettings()) {
+  const dark = isDark(settings);
+  el.modeToggle.textContent = dark ? "☀" : "☾";
+  const label = dark ? t("header.toLight") : t("header.toDark");
+  el.modeToggle.title = label;
+  el.modeToggle.setAttribute("aria-label", label);
+}
+
+function toggleMode() {
+  const settings = currentSettings();
+  const mode = isDark(settings) ? "light" : "dark";
+  if (state) {
+    state.settings.mode = mode;
+    applySettings();
+    if (isPersonalMode()) storage.writePersonal(state.settings);
+    else commit({ rerender: false });
+  } else {
+    const next = { ...settings, mode };
+    storage.writeAppearance(next);
+    applySettings(next);
+  }
+}
+
+el.modeToggle.addEventListener("click", toggleMode);
+darkQuery?.addEventListener?.("change", () => updateModeToggle());
+
+function render() {
+  applySettings();
+  destroySortables();
+  stopWidgetTimers();
+  updateEditing();
+
+  renderTabs();
+  const nodes = widgets().map(renderWidget);
+  // 編集モードで、編集できない組織のタブを開いているとき
+  if (editMode && !editing) {
+    const unit = storage.unitById(page().unit);
+    nodes.unshift(h("p", { class: "org-note" }, t("org.readonlyNote", { name: unit?.name || "" })));
+  }
+  if (editing) {
+    nodes.push(
+      h("button", { type: "button", class: "widget-add", onclick: () => openWidgetDialog(null) }, t("dashboard.addWidget")),
+    );
+  }
+  if (widgets().length === 0 && !editing) {
+    nodes.push(
+      h("p", { class: "widget__empty" }, t("dashboard.empty")),
+    );
+  }
+  el.dashboard.replaceChildren(...nodes);
+
+  setupSortables();
+  applyFilter();
+  updateClocks();
+  // カレンダー・メールは 1 分ごとに見直し、古くなっていたら読み込み直す
+  if (widgets().some((w) => REMOTE_WIDGETS.includes(w.type))) {
+    widgetTimers.push(setInterval(refreshGoogleWidgets, 60 * 1000));
+  }
+  if (focusAfterRender) {
+    $(focusAfterRender)?.focus();
+    focusAfterRender = null;
+  }
+}
+
+function renderWidget(widget) {
+  const style = isHexColor(widget.accent) ? { "--widget-accent": widget.accent } : {};
+  const section = h("section", {
+    class: `widget widget--${widget.type}`,
+    dataset: { id: widget.id, size: widget.size, rows: String(widget.rows), type: widget.type },
+    "data-accent": isHexColor(widget.accent) ? "" : null,
+    "aria-label": widget.title || typeName(widget.type),
+  });
+  // カスタムプロパティは Object.assign では入らないので setProperty で
+  for (const [k, v] of Object.entries(style)) section.style.setProperty(k, v);
+
+  const tools = h("div", { class: "widget__tools" });
+  // 編集モードでなくても出しておくボタン（リンク集の「＋」）
+  const quickTools = widget.type === "links"
+    ? h("div", { class: "widget__tools widget__tools--always" },
+      h("button", {
+        type: "button",
+        class: "button button--small button--ghost",
+        title: t("link.add"),
+        "aria-label": t("link.add"),
+        onclick: () => openLinkDialog(widget.id, null),
+      }, "＋"))
+    : null;
+  if (widget.type === "todo") {
+    tools.append(
+      h("button", {
+        type: "button",
+        class: "button button--small button--ghost",
+        title: t("todo.addCategory"),
+        "aria-label": t("todo.addCategory"),
+        onclick: () => addTodoCategory(widget),
+      }, "＋"),
+    );
+  }
+  if (widget.type === "habit") {
+    tools.append(
+      h("button", {
+        type: "button",
+        class: "button button--small button--ghost",
+        title: t("habit.add"),
+        "aria-label": t("habit.add"),
+        onclick: () => addHabit(widget),
+      }, "＋"),
+    );
+  }
+  if (widget.type === "photo") {
+    tools.append(
+      h("button", {
+        type: "button",
+        class: "button button--small button--ghost",
+        title: t("photo.add"),
+        "aria-label": t("photo.add"),
+        onclick: () => addPhotoByUrl(widget),
+      }, "＋"),
+    );
+  }
+  tools.append(
+    h("button", {
+      type: "button",
+      class: "button button--small button--ghost",
+      title: t("widget.editTitle"),
+      "aria-label": t("widget.editTitle"),
+      onclick: () => openWidgetDialog(widget.id),
+    }, "✎"),
+  );
+
+  section.append(
+    h("header", { class: "widget__header" },
+      h("span", { class: "widget__handle", title: t("widget.dragHandle"), "aria-hidden": "true" }, "⠿"),
+      h("h2", { class: "widget__title" }, h("span", { class: "widget__title-text" }, widget.title || "")),
+      HEADER_REFRESH_WIDGETS.includes(widget.type) ? renderHeaderRefresh(widget) : null,
+      quickTools,
+      tools,
+    ),
+    h("div", { class: "widget__body" }, renderWidgetBody(widget)),
+    h("span", {
+      class: "widget__resize",
+      title: FIXED_ROWS[widget.type] ? t("widget.resizeWidth") : t("widget.resize"),
+      "aria-hidden": "true",
+      onpointerdown: (event) => startResize(event, widget, section),
+    }),
+  );
+  return section;
+}
+
+/* ------------------------------------------------------------------ */
+/* ドラッグで大きさを変える（編集中・タイル表示のとき、右下の角をドラッグ）   */
+/* ------------------------------------------------------------------ */
+
+/** 今の画面でのグリッドの寸法（列の数・幅、段の高さ、すき間）と、幅の種類ごとの列数 */
+function gridMetrics() {
+  const style = getComputedStyle(el.dashboard);
+  const columns = style.gridTemplateColumns.split(" ").map(parseFloat).filter((n) => n > 0);
+  const cols = columns.length || 1;
+  const span = (name) => Math.min(cols, Number(style.getPropertyValue(`--span-${name}`)) || 1);
+  return {
+    cols,
+    colWidth: columns[0] || el.dashboard.clientWidth,
+    rowHeight: parseFloat(style.gridAutoRows) || 150,
+    colGap: parseFloat(style.columnGap) || 0,
+    rowGap: parseFloat(style.rowGap) || 0,
+    spans: { s: span("s"), m: span("m"), l: span("l"), xl: cols },
+  };
+}
+
+/** 列数 n に合う幅の種類。今の幅で同じ列数になるなら変えない（狭い画面で、広い画面用の幅を崩さない） */
+function sizeForColumns(n, current, type, spans) {
+  const allowed = SIZES.slice(SIZES.indexOf(minSizeOf(type).size));
+  if (allowed.includes(current) && spans[current] === n) return current;
+  const exact = allowed.find((size) => spans[size] === n);
+  if (exact) return exact;
+  // ちょうどの列数がなければ、いちばん近いもの
+  return allowed.reduce((best, size) => (Math.abs(spans[size] - n) < Math.abs(spans[best] - n) ? size : best), allowed[0]);
+}
+
+function startResize(event, widget, section) {
+  if (!editing || state.settings.layout === "flow" || event.button > 0) return;
+  event.preventDefault();
+  const handle = event.currentTarget;
+  handle.setPointerCapture(event.pointerId);
+  const m = gridMetrics();
+  const rect = section.getBoundingClientRect();
+  const start = { x: event.clientX, y: event.clientY, width: rect.width, height: rect.height };
+  const fixedRows = FIXED_ROWS[widget.type];
+  const minRows = minSizeOf(widget.type).rows;
+  let size = widget.size;
+  let rows = widget.rows;
+
+  const badge = h("span", { class: "widget__resize-badge" });
+  section.append(badge);
+  section.classList.add("is-resizing");
+  const show = () => {
+    section.dataset.size = size;
+    section.dataset.rows = String(rows);
+    badge.textContent = t("widget.resizeBadge", { size: SIZE_NAMES[size], cols: m.spans[size], rows }) + (fixedRows ? t("widget.resizeFixed") : "");
+  };
+  show();
+
+  const move = (e) => {
+    const width = start.width + (e.clientX - start.x);
+    const height = start.height + (e.clientY - start.y);
+    const n = Math.min(m.cols, Math.max(1, Math.round((width + m.colGap) / (m.colWidth + m.colGap))));
+    size = sizeForColumns(n, widget.size, widget.type, m.spans);
+    if (!fixedRows) {
+      const r = Math.round((height + m.rowGap) / (m.rowHeight + m.rowGap));
+      rows = Math.max(minRows, Math.min(ROW_OPTIONS[ROW_OPTIONS.length - 1], r));
+    }
+    show();
+  };
+  const end = () => {
+    handle.removeEventListener("pointermove", move);
+    handle.removeEventListener("pointerup", end);
+    handle.removeEventListener("pointercancel", end);
+    badge.remove();
+    section.classList.remove("is-resizing");
+    if (size !== widget.size || rows !== widget.rows) {
+      widget.size = size;
+      widget.rows = rows;
+      commit();
+    } else {
+      show();
+    }
+  };
+  handle.addEventListener("pointermove", move);
+  handle.addEventListener("pointerup", end);
+  handle.addEventListener("pointercancel", end);
+}
+
+function renderWidgetBody(widget) {
+  switch (widget.type) {
+    case "notice": return renderNotice(widget);
+    case "links": return renderLinks(widget);
+    case "note": return renderNote(widget);
+    case "clock": return renderClock(widget);
+    case "search": return renderSearch(widget);
+    case "embed": return renderEmbed(widget);
+    case "todo": return renderTodo(widget);
+    case "photo": return renderPhoto(widget);
+    case "calendar": return renderCalendar(widget);
+    case "mail": return renderMail(widget);
+    case "weather": return renderWeather(widget);
+    case "timer": return renderTimer(widget);
+    case "worldclock": return renderWorldClock(widget);
+    case "habit": return renderHabit(widget);
+    case "github": return renderGitHub(widget);
+    case "yamato": return renderYamato(widget);
+    default: return renderAddonWidget(widget);
+  }
+}
+
+function renderLinks(widget) {
+  const list = h("ul", {
+    class: `link-list link-list--${widget.view}`,
+    dataset: { widgetId: widget.id },
+  });
+  for (const item of widget.items) {
+    list.append(renderLinkItem(widget, item));
+  }
+  // 空のときも一覧（ul）を置いておく（ほかのリンク集からドラッグで移せるように）。説明文は CSS で表示する
+  if (widget.items.length === 0) list.dataset.empty = t("link.empty");
+  return list;
+}
+
+function renderLinkItem(widget, item) {
+  const url = safeUrl(item.url);
+  const title = item.title || hostname(url) || url;
+  const newTab = state.settings.openInNewTab;
+  const link = h("a", {
+    class: "link",
+    href: url,
+    target: newTab ? "_blank" : null,
+    rel: newTab ? "noopener noreferrer" : "noreferrer",
+    title: item.description ? `${title}\n${item.description}` : url,
+  },
+    renderIcon(item, url, title),
+    h("span", { class: "link__text" },
+      h("span", { class: "link__title" }, title),
+      item.description ? h("span", { class: "link__desc" }, item.description) : null,
+    ),
+  );
+  // 編集モード中はリンクを開かずに編集する
+  link.addEventListener("click", (event) => {
+    if (editing || link.dataset.longPressed || Date.now() < suppressLinkClickUntil) {
+      event.preventDefault();
+      delete link.dataset.longPressed;
+      if (editing) openLinkDialog(widget.id, item.id);
+    }
+  });
+  addLongPress(link, () => openLinkDialog(widget.id, item.id));
+
+  return h("li", {
+    class: "link-item",
+    dataset: { id: item.id, search: `${title} ${url} ${item.description || ""}`.toLowerCase() },
+  },
+    link,
+    h("button", {
+      type: "button",
+      class: "button button--small button--ghost link-item__edit",
+      "aria-label": t("link.editAria", { name: title }),
+      onclick: () => openLinkDialog(widget.id, item.id),
+    }, "✎"),
+  );
+}
+
+/*
+ * スマホ・タブレット：リンクを長押しすると編集画面を開く（編集モードでなくても）。
+ * 指を動かしたら（スクロール・ドラッグ）取りやめる。マウスの右クリックは、ブラウザのいつものメニューのまま。
+ */
+const LONG_PRESS_MS = 550;
+
+function addLongPress(target, onLongPress) {
+  let timer = null;
+  let start = null;
+  const cancel = () => { clearTimeout(timer); timer = null; };
+  target.addEventListener("pointerdown", (event) => {
+    if (event.pointerType === "mouse" || editing) return;
+    start = { x: event.clientX, y: event.clientY };
+    cancel();
+    timer = setTimeout(() => {
+      timer = null;
+      if (linkDragging) return; // 長押しから指を動かして、リンクを移動しているところ
+      target.dataset.longPressed = "1"; // 指を離したときのクリック（リンクを開く）を止める
+      navigator.vibrate?.(10);
+      onLongPress();
+    }, LONG_PRESS_MS);
+  });
+  target.addEventListener("pointermove", (event) => {
+    if (timer && start && Math.hypot(event.clientX - start.x, event.clientY - start.y) > 10) cancel();
+  });
+  for (const type of ["pointerup", "pointercancel", "pointerleave"]) target.addEventListener(type, cancel);
+  // 長押しで出るブラウザのメニュー（リンクを開く・共有など）は出さない
+  target.addEventListener("contextmenu", (event) => {
+    if (target.dataset.longPressed || timer) event.preventDefault();
+  });
+}
+
+function renderIcon(item, url, title) {
+  const icon = (item.icon || "").trim();
+  const letter = () =>
+    h("span", { class: "link__icon link__icon--letter", "aria-hidden": "true" }, (title || "?").trim().charAt(0).toUpperCase());
+
+  // 試す画像の順番：自分で設定した画像 →（未設定なら）ファビコン取得サービス → サイトの /favicon.ico → 頭文字
+  let sources = [];
+  if (icon && safeUrl(icon)) {
+    sources = [safeUrl(icon)];
+  } else if (!icon && state.settings.useFavicons && /^https?:/.test(url) && hostname(url)) {
+    sources = faviconSources(url);
+  }
+
+  if (sources.length) {
+    const img = h("img", { alt: "", loading: "lazy", referrerpolicy: "no-referrer" });
+    const wrap = h("span", { class: "link__icon", "aria-hidden": "true" }, img);
+    let index = 0;
+    const next = () => {
+      index += 1;
+      if (index < sources.length) img.src = sources[index];
+      else wrap.replaceWith(letter());
+    };
+    img.addEventListener("error", next);
+    img.addEventListener("load", () => {
+      // 取得サービスは、ファビコンが見つからないと 16px の地球儀を返すので、次の候補を試す
+      if (sources[index].startsWith(FAVICON_SERVICE_ORIGIN) && img.naturalWidth <= 16 && index < sources.length - 1) next();
+    });
+    img.src = sources[0];
+    return wrap;
+  }
+  if (icon) return h("span", { class: "link__icon", "aria-hidden": "true" }, icon); // 絵文字
+  return letter();
+}
+
+const FAVICON_SERVICE_ORIGIN = new URL(FAVICON_URL).origin;
+
+/** ファビコンの候補（取得サービス → サイトの /favicon.ico） */
+function faviconSources(url) {
+  const u = new URL(url);
+  const firstSegment = u.pathname.split("/").filter(Boolean)[0];
+  // 最後の「/」まで付けると、Google ドキュメントなどページごとのアイコンが返ってくる
+  const page = `${u.origin}/${firstSegment ? `${firstSegment}/` : ""}`;
+  return [
+    FAVICON_URL.replace("{url}", encodeURIComponent(page)).replace("{domain}", encodeURIComponent(u.hostname)),
+    `${u.origin}/favicon.ico`,
+  ];
+}
+
+/** Markdown を安全な HTML にする（ライブラリが読み込めないときは null） */
+function markdownToHtml(text) {
+  if (typeof marked === "undefined" || typeof DOMPurify === "undefined") return null;
+  const html = marked.parse(text, { gfm: true, breaks: true, async: false });
+  return DOMPurify.sanitize(html);
+}
+
+/** チェックボックスの行（- [ ] / - [x]）にあたる正規表現 */
+const TASK_LINE = /^(\s*(?:[-*+]|\d+[.)])\s+)\[( |x|X)\]/gm;
+
+function renderNote(widget) {
+  const area = h("textarea", {
+    class: "note",
+    "aria-label": widget.title || t("widget.note"),
+    placeholder: widget.markdown === false
+      ? t("note.placeholder")
+      : t("note.placeholderMarkdown"),
+  });
+  area.value = widget.text || "";
+  area.addEventListener("input", () => {
+    widget.text = area.value;
+    commit({ rerender: false });
+  });
+  if (widget.markdown === false) return area;
+
+  // Markdown：ふだんは整えて表示し、クリックすると編集に切り替える
+  const view = h("div", {
+    class: "note note--view markdown",
+    tabindex: "0",
+    title: t("note.clickToEdit"),
+    "aria-label": t("note.viewAria", { name: widget.title || t("widget.note") }),
+  });
+  const box = h("div", { class: "note-box" }, view, area);
+
+  const showView = () => {
+    const text = widget.text || "";
+    const html = text.trim() ? markdownToHtml(text) : null;
+    if (text.trim() && html === null) return; // ライブラリが読めないときは編集欄のまま
+    if (!text.trim()) {
+      view.replaceChildren(h("p", { class: "note__placeholder" }, t("note.empty")));
+    } else {
+      view.innerHTML = html;
+      for (const a of view.querySelectorAll("a[href]")) {
+        a.target = "_blank";
+        a.rel = "noopener noreferrer";
+      }
+      // チェックボックスは、クリックで元の文章の [ ] / [x] を切り替える
+      [...view.querySelectorAll('input[type="checkbox"]')].forEach((box, n) => {
+        box.disabled = false;
+        box.addEventListener("change", () => {
+          let i = -1;
+          widget.text = (widget.text || "").replace(TASK_LINE, (all, head, mark) => {
+            i += 1;
+            return i === n ? `${head}[${mark === " " ? "x" : " "}]` : all;
+          });
+          area.value = widget.text;
+          commit({ rerender: false });
+          showView();
+        });
+      });
+    }
+    view.hidden = false;
+    area.hidden = true;
+  };
+  const showEdit = () => {
+    view.hidden = true;
+    area.hidden = false;
+    area.focus();
+  };
+
+  view.addEventListener("click", (event) => {
+    if (editing || event.target.closest("a, input")) return;
+    showEdit();
+  });
+  view.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" && event.target === view) {
+      event.preventDefault();
+      showEdit();
+    }
+  });
+  area.addEventListener("blur", showView);
+  area.addEventListener("keydown", (event) => {
+    if (event.key === "Escape") area.blur();
+  });
+  showView();
+  return box;
+}
+
+function renderClock(widget) {
+  return h("div", { class: "clock", dataset: { timeZone: widget.timeZone || "" } },
+    h("span", { class: "clock__time" }),
+    h("span", { class: "clock__date" }),
+  );
+}
+
+function updateClocks() {
+  const now = new Date();
+  for (const node of $$(".clock", el.dashboard)) {
+    const timeZone = node.dataset.timeZone || undefined;
+    try {
+      $(".clock__time", node).textContent = now.toLocaleTimeString(locale(), {
+        timeZone, hour: "2-digit", minute: "2-digit", second: "2-digit",
+      });
+      $(".clock__date", node).textContent = now.toLocaleDateString(locale(), {
+        timeZone, year: "numeric", month: "long", day: "numeric", weekday: "short",
+      });
+    } catch {
+      $(".clock__date", node).textContent = t("clock.invalidZone", { zone: timeZone });
+    }
+  }
+  updateWorldClocks(now);
+  updateTimers();
+}
+
+function renderSearch(widget) {
+  const input = h("input", { class: "input", type: "search", name: "q", placeholder: t("search.placeholder"), "aria-label": t("widget.search") });
+  const form = h("form", { class: "web-search" },
+    input,
+    h("button", { class: "button button--primary", type: "submit" }, t("search.placeholder")),
+  );
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const q = input.value.trim();
+    if (!q) return;
+    const template = widget.searchUrl || DEFAULT_SEARCH_URL;
+    const url = safeUrl(template.replace("%s", encodeURIComponent(q)));
+    if (url) window.open(url, state.settings.openInNewTab ? "_blank" : "_self", "noopener");
+  });
+  return form;
+}
+
+/* ================================================================== */
+/* 荷物の追跡（ヤマト運輸）                                               */
+/* ================================================================== */
+/*
+ * 送り状（伝票）番号から、ヤマト運輸の荷物状況お問い合わせの URL を作る（1 つの URL に番号 1 件）。
+ * 番号は 1 回に 10 件まで（空白・カンマ・改行で区切る）。最近調べた番号は、ウィジェットに 10 件まで残す（保存データに入る）。
+ */
+const YAMATO_URL = "https://jizen.kuronekoyamato.co.jp/jizen/servlet/crjz.b.NQ0010?id=";
+const YAMATO_MAX = 10;
+const YAMATO_RECENT = 10;
+
+/** 入力から送り状番号を取り出す（数字だけにする。10〜12 桁のもの） */
+function parseTrackingNumbers(text) {
+  const numbers = String(text).split(/[\s,、，]+/)
+    .map((part) => part.replace(/[０-９]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0xfee0)).replace(/[^0-9]/g, ""))
+    .filter(Boolean);
+  const valid = numbers.filter((n) => n.length >= 10 && n.length <= 12);
+  const invalid = numbers.filter((n) => n.length < 10 || n.length > 12);
+  return { valid: [...new Set(valid)].slice(0, YAMATO_MAX), invalid };
+}
+
+/** 12 桁の番号は、最後の 1 桁が「前の 11 桁を 7 で割った余り」になっている（打ち間違いの目安） */
+function trackingCheckDigitOk(n) {
+  if (n.length !== 12) return true;
+  return Number(BigInt(n.slice(0, 11)) % 7n) === Number(n[11]);
+}
+
+/** 1234-5678-9012 のように 4 桁ずつ区切って表示 */
+function formatTrackingNumber(n) {
+  return n.replace(/(\d{4})(?=\d)/g, "$1-");
+}
+
+/** 送り状番号の追跡 URL */
+function yamatoUrl(number) {
+  return YAMATO_URL + encodeURIComponent(number);
+}
+
+function openYamato(number) {
+  window.open(yamatoUrl(number), state.settings.openInNewTab ? "_blank" : "_self", "noopener");
+}
+
+async function copyText(text) {
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast(t("yamato.copied"));
+  } catch {
+    showToast(t("yamato.copyFailed"));
+  }
+}
+
+function renderYamato(widget) {
+  const newTab = state.settings.openInNewTab;
+  const input = h("input", {
+    class: "input", name: "tracking", inputmode: "numeric", autocomplete: "off",
+    placeholder: t("yamato.placeholder"), "aria-label": t("yamato.label"),
+  });
+  const note = h("p", { class: "yamato__note", "aria-live": "polite" });
+  const urls = h("ul", { class: "yamato__urls" });
+  const urlRow = (number) => h("li", { class: "yamato__url-row" },
+    h("a", { class: "yamato__url", href: yamatoUrl(number), target: newTab ? "_blank" : null, rel: "noopener noreferrer", title: yamatoUrl(number) },
+      yamatoUrl(number)),
+    h("button", { type: "button", class: "button button--small", onclick: () => copyText(yamatoUrl(number)) }, t("yamato.copy")));
+
+  /** 入力を見て、作った URL とお知らせを出す */
+  const check = () => {
+    const { valid, invalid } = parseTrackingNumbers(input.value);
+    const messages = [];
+    if (input.value.trim() && !valid.length) messages.push(t("yamato.invalid"));
+    if (invalid.length && valid.length) messages.push(t("yamato.skipped", { n: invalid.length }));
+    const suspicious = valid.filter((n) => !trackingCheckDigitOk(n));
+    if (suspicious.length) messages.push(t("yamato.checkDigit", { numbers: suspicious.map(formatTrackingNumber).join(", ") }));
+    note.textContent = messages.join(" ");
+    note.hidden = !messages.length;
+    urls.replaceChildren(...valid.map(urlRow));
+    urls.hidden = !valid.length;
+    return valid;
+  };
+  input.addEventListener("input", check);
+  check();
+
+  const remember = (numbers) => {
+    const recent = (widget.recent || []).filter((r) => !numbers.includes(r.number));
+    widget.recent = [...numbers.map((number) => ({ number, at: Date.now() })), ...recent].slice(0, YAMATO_RECENT);
+    commit({ rerender: false });
+    renderRecent();
+  };
+
+  const form = h("form", { class: "yamato__form" },
+    input,
+    h("button", { class: "button button--primary", type: "submit" }, t("yamato.track")));
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const numbers = check();
+    if (!numbers.length) return;
+    // 1 回のクリックで開けるのは 1 件だけ（ブラウザがポップアップとして止めるため）。2 件目からは下の URL から開く
+    openYamato(numbers[0]);
+    remember(numbers);
+    if (numbers.length === 1) { input.value = ""; check(); }
+  });
+
+  const recentList = h("ul", { class: "yamato__recent", "aria-label": t("yamato.recent") });
+  const renderRecent = () => {
+    recentList.replaceChildren(...(widget.recent || []).map((r) => h("li", { class: "yamato__recent-item" },
+      h("a", {
+        class: "yamato__recent-open", href: yamatoUrl(r.number), target: newTab ? "_blank" : null,
+        rel: "noopener noreferrer", title: t("yamato.track"),
+      }, formatTrackingNumber(r.number)),
+      h("span", { class: "yamato__recent-tools" },
+        h("button", {
+          type: "button", class: "button button--small button--ghost", title: t("yamato.copy"), "aria-label": t("yamato.copy"),
+          onclick: () => copyText(yamatoUrl(r.number)),
+        }, "⧉"),
+        h("button", {
+          type: "button", class: "button button--small button--ghost", title: t("yamato.remove"), "aria-label": t("yamato.remove"),
+          onclick: () => {
+            widget.recent = widget.recent.filter((x) => x.number !== r.number);
+            commit({ rerender: false });
+            renderRecent();
+          },
+        }, "×")),
+    )));
+    recentList.hidden = !recentList.children.length;
+  };
+  renderRecent();
+
+  return h("div", { class: "yamato" }, form, note, urls, recentList);
+}
+
+function renderEmbed(widget) {
+  // YouTube の URL は、そのまま貼れば埋め込み用のプレーヤーに変換する
+  const youtube = toYouTubeEmbed(widget.embedUrl || "");
+  if (youtube) {
+    return h("iframe", {
+      class: `embed embed--video${youtube.vertical ? " embed--vertical" : ""}`,
+      src: youtube.src,
+      title: widget.title || t("embed.youtube"),
+      loading: "lazy",
+      // YouTube は参照元の情報がないと再生できない（エラー 153）ため、送る設定にする
+      referrerpolicy: "strict-origin-when-cross-origin",
+      allow: "accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share",
+      allowfullscreen: true,
+    });
+  }
+
+  const url = safeUrl(widget.embedUrl || "");
+  if (!url || !/^https:/.test(url)) {
+    return h("p", { class: "widget__empty" },
+      t("embed.empty"));
+  }
+  const frame = h("iframe", {
+    class: "embed",
+    src: url,
+    title: widget.title || t("widget.embed"),
+    loading: "lazy",
+    referrerpolicy: "no-referrer",
+    sandbox: "allow-scripts allow-same-origin allow-popups allow-forms",
+  });
+  // 高さはタイル表示では段に合わせ、「中身に合わせる」表示のときだけこの値を使う
+  frame.style.setProperty("--embed-height", `${Math.min(Math.max(Number(widget.height) || 400, 120), 1600)}px`);
+  return frame;
+}
+
+/* ================================================================== */
+/* 写真                                                                 */
+/* ================================================================== */
+
+/** ウィジェットごとに表示中の写真の番号（保存しない表示状態） */
+const photoIndexes = new Map();
+const widgetTimers = [];
+
+function stopWidgetTimers() {
+  while (widgetTimers.length) clearInterval(widgetTimers.pop());
+}
+
+function renderPhoto(widget) {
+  const photos = widget.photos;
+
+  // 編集モード：写真の一覧（並べ替え・キャプション・削除）
+  if (editing) {
+    const list = h("ul", { class: "photo-thumbs", dataset: { widgetId: widget.id } },
+      ...photos.map((ph) => h("li", { class: "photo-thumb", dataset: { id: ph.id } },
+        h("img", { class: "photo-thumb__img", src: ph.url, alt: "", loading: "lazy", referrerpolicy: "no-referrer" }),
+        h("span", { class: "photo-thumb__tools" },
+          h("button", {
+            type: "button",
+            class: "button button--small",
+            title: t("photo.captionEdit"),
+            "aria-label": t("photo.captionEdit"),
+            onclick: async () => {
+              const caption = await askText({ title: t("photo.captionTitle"), label: t("photo.captionLabel"), value: ph.caption, allowEmpty: true });
+              if (caption === null) return;
+              ph.caption = caption;
+              commit();
+            },
+          }, "✎"),
+          h("button", {
+            type: "button",
+            class: "button button--small button--danger",
+            title: t("photo.remove"),
+            "aria-label": t("photo.remove"),
+            onclick: () => {
+              widget.photos = widget.photos.filter((x) => x.id !== ph.id);
+              commit();
+            },
+          }, "×"),
+        ),
+      )),
+    );
+    return h("div", { class: "photo-edit" },
+      list,
+      h("p", { class: "widget__empty" }, t("photo.editHint")));
+  }
+
+  if (photos.length === 0) {
+    return h("p", { class: "widget__empty" },
+      t("photo.empty"));
+  }
+
+  let index = Math.min(photoIndexes.get(widget.id) || 0, photos.length - 1);
+  const img = h("img", { class: "photo__img", alt: "", referrerpolicy: "no-referrer", decoding: "async" });
+  const caption = h("span", { class: "photo__caption" });
+  const error = h("span", { class: "photo__error", hidden: true }, t("photo.loadError"));
+  const dots = h("span", { class: "photo__dots", "aria-hidden": "true" },
+    ...photos.map(() => h("span", { class: "photo__dot" })));
+  const link = h("a", { class: "photo__link", target: "_blank", rel: "noopener noreferrer", title: t("photo.openOriginal") }, img);
+
+  const show = (i) => {
+    index = (i + photos.length) % photos.length;
+    photoIndexes.set(widget.id, index);
+    const ph = photos[index];
+    error.hidden = true;
+    img.hidden = false;
+    img.src = ph.url;
+    img.alt = ph.caption || t("photo.alt", { n: index + 1 });
+    link.href = ph.url;
+    caption.textContent = ph.caption;
+    caption.hidden = !ph.caption;
+    [...dots.children].forEach((d, n) => d.classList.toggle("is-active", n === index));
+    // 次の写真を先に読み込んでおく
+    if (photos.length > 1) new Image().src = photos[(index + 1) % photos.length].url;
+  };
+  img.addEventListener("error", () => { img.hidden = true; error.hidden = false; });
+
+  const frame = h("div", {
+    class: `photo photo--${widget.fit}`,
+    role: "group",
+    "aria-roledescription": t("photo.slideshow"),
+    "aria-label": widget.title || t("widget.photo"),
+  }, link, error, caption);
+
+  if (photos.length > 1) {
+    frame.append(
+      h("button", { type: "button", class: "photo__nav photo__nav--prev", "aria-label": t("photo.prev"), onclick: () => show(index - 1) }, "‹"),
+      h("button", { type: "button", class: "photo__nav photo__nav--next", "aria-label": t("photo.next"), onclick: () => show(index + 1) }, "›"),
+      dots,
+    );
+    // 一定間隔で切り替え（マウスを乗せている間と、ページが隠れている間は止める）
+    if (widget.interval > 0) {
+      let hovering = false;
+      frame.addEventListener("mouseenter", () => { hovering = true; });
+      frame.addEventListener("mouseleave", () => { hovering = false; });
+      widgetTimers.push(setInterval(() => {
+        if (!hovering && !document.hidden && frame.isConnected) show(index + 1);
+      }, widget.interval * 1000));
+    }
+  }
+  show(index);
+  return frame;
+}
+
+async function addPhotoByUrl(widget) {
+  const value = await askText({
+    title: t("photo.add"),
+    label: t("photo.urlLabel"),
+    value: "",
+  });
+  if (!value) return;
+  const url = toImageUrl(value);
+  if (!url) {
+    showToast(t("link.invalidUrl"));
+    return;
+  }
+  addPhoto(widget, url);
+}
+
+function addPhoto(widget, url) {
+  if (widget.photos.some((ph) => ph.url === url)) {
+    showToast(t("photo.duplicate"));
+    return false;
+  }
+  widget.photos.push({ id: uid(), url, caption: "" });
+  photoIndexes.set(widget.id, widget.photos.length - 1); // 追加した写真を表示
+  commit();
+  return true;
+}
+
+/** ドロップされたデータから画像の URL を取り出す（<img src> を優先） */
+function readDroppedImage(dataTransfer) {
+  const html = dataTransfer.getData("text/html");
+  if (html) {
+    const img = new DOMParser().parseFromString(html, "text/html").querySelector("img[src]");
+    const src = img && toImageUrl(img.getAttribute("src"));
+    if (src) return src;
+  }
+  const link = readDroppedLink(dataTransfer);
+  return link ? toImageUrl(link.url) : null;
+}
+
+/* ================================================================== */
+/* Google カレンダー・Gmail                                              */
+/* ================================================================== */
+
+/** 取得した予定・件数の一時的な控え（保存しない）。widgetId → { key, data, error, fetchedAt, loading } */
+const googleCache = new Map();
+const GOOGLE_REFRESH_MS = 10 * 60 * 1000;
+let currentEmail = "";
+
+function scopesFor(type) {
+  return type === "calendar" ? [CALENDAR_SCOPE] : [GMAIL_SCOPE];
+}
+
+/** カレンダー・メールのウィジェットの中身を、それぞれ描き直す（読み込み直しの判定も行う） */
+function refreshGoogleWidgets() {
+  for (const widget of widgets()) {
+    if (REMOTE_WIDGETS.includes(widget.type)) refreshWidgetBody(widget);
+  }
+}
+
+function refreshWidgetBody(widget) {
+  const body = el.dashboard.querySelector(`.widget[data-id="${CSS.escape(widget.id)}"] .widget__body`);
+  if (!body) return;
+  const content = renderWidgetBody(widget);
+  body.replaceChildren(...(content ? [content] : []));
+  if (HEADER_REFRESH_WIDGETS.includes(widget.type)) updateHeaderRefresh(widget);
+}
+
+/**
+ * 共通の流れ：未ログイン → 説明 / 連携前・期限切れ → 「連携」ボタン / 連携済み → 読み込んで表示
+ */
+function renderGoogleWidget(widget, { cacheKey, load, view }) {
+  const scopes = scopesFor(widget.type);
+  if (!storage.canUseGoogleApi()) {
+    return h("p", { class: "widget__empty" },
+      t("google.needFirebase"));
+  }
+  const token = storage.getGoogleToken(scopes);
+  const entry = googleCache.get(widget.id);
+  const connect = async () => {
+    try {
+      const got = await storage.connectGoogle(scopes);
+      if (!got) return;
+      googleCache.delete(widget.id);
+      refreshGoogleWidgets();
+    } catch (err) {
+      showToast(err.message);
+    }
+  };
+  if (!token) {
+    // 期限が切れても、最後に読み込んだ内容は表示したままにして、小さく「連携し直す」を出す
+    if (entry?.data !== undefined && entry.key === cacheKey) {
+      const compact = widget.type === "mail"; // 1 段のウィジェットには短く出す
+      return h("div", { class: `google-widget${compact ? " google-widget--compact" : ""}` },
+        h("p", {
+          class: "google-expired",
+          title: state.settings.autoRenewGoogle ? t("google.autoRenewHint") : null,
+        },
+          h("span", {}, compact || !state.settings.autoRenewGoogle
+            ? t("google.expired")
+            : t("google.expiredAutoRenew")),
+          h("button", { type: "button", class: "button button--small", onclick: connect }, t("google.reconnect")),
+        ),
+        view(entry.data),
+      );
+    }
+    return h("div", { class: "google-connect" },
+      h("p", { class: "widget__empty" }, widget.type === "calendar"
+        ? t("google.calendarPermission")
+        : t("google.mailPermission")),
+      h("button", { type: "button", class: "button button--primary", onclick: connect },
+        storage.getGoogleConnection() ? t("google.reconnect") : t("google.connect")),
+    );
+  }
+
+  return renderRemote(widget, {
+    cacheKey,
+    load: () => load(token),
+    view,
+    refreshMs: GOOGLE_REFRESH_MS,
+    onError: (err) => { if (err.expired) storage.forgetGoogleToken(); },
+  });
+}
+
+/*
+ * 連携の自動延長：Google の連携（アクセストークン）は 1 時間で切れ、ブラウザだけでは延ばせない。
+ * そこで、期限が近い・切れたあとに利用者が画面をクリックしたら、そのクリックをきっかけに取り直す
+ * （ポップアップはクリックなどの操作からしか開けないため）。一度許可していれば、ポップアップは自動で閉じる。
+ */
+const RENEW_BEFORE_MS = 10 * 60 * 1000; // 期限の 10 分前から延長する
+const RENEW_RETRY_MS = 3 * 60 * 1000; // 失敗したら、しばらく試さない
+let renewing = false;
+let lastRenewAttempt = 0;
+
+function needsGoogleRenewal() {
+  if (!state || !state.settings.autoRenewGoogle || !storage.canUseGoogleApi()) return false;
+  if (!widgets().some((w) => GOOGLE_WIDGETS.includes(w.type))) return false;
+  const connection = storage.getGoogleConnection();
+  if (!connection) return false; // 一度も連携していなければ、自動では始めない
+  return connection.expiresAt - Date.now() < RENEW_BEFORE_MS;
+}
+
+document.addEventListener("click", (event) => {
+  if (renewing || Date.now() - lastRenewAttempt < RENEW_RETRY_MS) return;
+  if (event.target.closest?.("dialog, .google-connect, .google-expired")) return; // 自分で押すボタンの邪魔をしない
+  if (!needsGoogleRenewal()) return;
+  renewing = true;
+  lastRenewAttempt = Date.now();
+  storage.connectGoogle(storage.getGoogleConnection().scopes)
+    .then((token) => {
+      if (!token) return;
+      for (const w of widgets()) if (GOOGLE_WIDGETS.includes(w.type) && googleCache.get(w.id)?.error) googleCache.delete(w.id);
+      refreshGoogleWidgets();
+    })
+    .catch(() => { /* ポップアップがブロックされたなど。ウィジェットの「連携し直す」から手動で */ })
+    .finally(() => { renewing = false; });
+}, true);
+
+/** 更新ボタンを見出しの右に置く（中に更新時刻の行を出さない）ウィジェット */
+const HEADER_REFRESH_WIDGETS = ["calendar", "mail"];
+
+/** 見出しの更新ボタンに出す説明（最後に読み込んだ時刻つき） */
+function refreshButtonTitle(widget) {
+  const entry = googleCache.get(widget.id);
+  if (entry?.loading) return t("common.loading");
+  const time = entry?.fetchedAt
+    ? new Date(entry.fetchedAt).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })
+    : "";
+  return time ? t("common.refreshAt", { time }) : t("common.refresh");
+}
+
+/** 見出しの更新ボタンを出すか（Google のウィジェットは、連携中のときだけ） */
+function canRefreshHeader(widget) {
+  if (!GOOGLE_WIDGETS.includes(widget.type)) return true;
+  return storage.canUseGoogleApi() && Boolean(storage.getGoogleToken(scopesFor(widget.type)));
+}
+
+function renderHeaderRefresh(widget) {
+  return h("button", {
+    type: "button",
+    class: "button button--small button--ghost widget__refresh",
+    hidden: !canRefreshHeader(widget),
+    title: refreshButtonTitle(widget),
+    "aria-label": refreshButtonTitle(widget),
+    onclick: () => {
+      const e = googleCache.get(widget.id);
+      if (e?.loading) return;
+      if (e) e.fetchedAt = 0;
+      refreshWidgetBody(widget);
+    },
+  }, "↻");
+}
+
+/** 見出しの更新ボタンの説明を、今の状態に合わせる */
+function updateHeaderRefresh(widget) {
+  const button = el.dashboard.querySelector(`.widget[data-id="${CSS.escape(widget.id)}"] .widget__refresh`);
+  if (!button) return;
+  button.hidden = !canRefreshHeader(widget);
+  const title = refreshButtonTitle(widget);
+  button.title = title;
+  button.setAttribute("aria-label", title);
+  button.classList.toggle("is-loading", Boolean(googleCache.get(widget.id)?.loading));
+}
+
+/**
+ * 外部から読み込んで表示するウィジェットの共通部分（カレンダー・Gmail・天気・GitHub）。
+ * 読み込んだ結果は googleCache に控え、refreshMs ごとに読み込み直す。
+ */
+function renderRemote(widget, { cacheKey, load, view, refreshMs, onError }) {
+  const entry = googleCache.get(widget.id);
+  const stale = !entry || entry.key !== cacheKey || Date.now() - entry.fetchedAt > refreshMs;
+  if (stale && !entry?.loading) loadRemote(widget, cacheKey, load, onError);
+  const current = googleCache.get(widget.id);
+
+  const updated = current?.fetchedAt
+    ? new Date(current.fetchedAt).toLocaleTimeString(locale(), { hour: "2-digit", minute: "2-digit" })
+    : "";
+  // 見出しに更新ボタンを置くウィジェットは、更新時刻の行を出さずに中身を上に詰める
+  const toolbar = HEADER_REFRESH_WIDGETS.includes(widget.type) ? null : h("div", { class: "google-toolbar" },
+    h("span", { class: "google-toolbar__time" },
+      current?.loading ? t("common.loading") : updated ? t("common.updatedAt", { time: updated }) : ""),
+    h("button", {
+      type: "button",
+      class: "button button--small button--ghost",
+      title: t("common.refresh"),
+      "aria-label": t("common.refresh"),
+      disabled: current?.loading,
+      onclick: () => {
+        const e = googleCache.get(widget.id);
+        if (e) e.fetchedAt = 0;
+        refreshWidgetBody(widget);
+      },
+    }, "↻"),
+  );
+
+  let content;
+  if (current?.data !== undefined && current?.key === cacheKey) content = view(current.data);
+  else if (current?.error) content = null;
+  else content = h("p", { class: "widget__empty" }, t("common.loading"));
+
+  return h("div", { class: "google-widget" },
+    toolbar,
+    current?.error ? h("div", { class: "google-error" },
+      h("p", {}, current.error),
+      current.errorLink && safeUrl(current.errorLink.url)
+        ? h("a", {
+          class: "google-error__link",
+          href: safeUrl(current.errorLink.url),
+          target: "_blank",
+          rel: "noopener noreferrer",
+        }, current.errorLink.label)
+        : null,
+    ) : null,
+    content,
+  );
+}
+
+async function loadRemote(widget, key, load, onError) {
+  const entry = { ...(googleCache.get(widget.id) || {}), key, loading: true };
+  googleCache.set(widget.id, entry);
+  queueMicrotask(() => updateHeaderRefresh(widget)); // 見出しのボタンを「読み込み中」に（描き終わってから）
+  try {
+    entry.data = await load();
+    entry.error = null;
+    entry.errorLink = null;
+  } catch (err) {
+    entry.error = err.message;
+    entry.errorLink = err.link || null;
+    onError?.(err);
+  }
+  entry.fetchedAt = Date.now();
+  entry.loading = false;
+  refreshWidgetBody(widget);
+  updateHeaderRefresh(widget);
+}
+
+function renderCalendar(widget) {
+  return renderGoogleWidget(widget, {
+    cacheKey: `${widget.days}:${widget.allCalendars}`,
+    load: (token) => fetchCalendarEvents(token, { days: widget.days, allCalendars: widget.allCalendars }),
+    view: (events) => renderCalendarEvents(widget, events),
+  });
+}
+
+function renderCalendarEvents(widget, events) {
+  if (events.length === 0) {
+    return h("p", { class: "widget__empty" },
+      widget.days === 1 ? t("calendar.emptyToday") : t("calendar.emptyDays", { n: widget.days }));
+  }
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const dayKey = (d) => `${d.getFullYear()}-${d.getMonth()}-${d.getDate()}`;
+  const groups = new Map();
+  for (const ev of events) {
+    const start = ev.start < today ? today : ev.start; // 前日から続く予定は今日に表示
+    const key = dayKey(start);
+    if (!groups.has(key)) groups.set(key, { date: new Date(start.getFullYear(), start.getMonth(), start.getDate()), items: [] });
+    groups.get(key).items.push(ev);
+  }
+  const time = (d) => d.toLocaleTimeString(locale(), { hour: "numeric", minute: "2-digit" });
+  const label = (d) => {
+    const diff = Math.round((d - today) / 86400000);
+    const date = d.toLocaleDateString(locale(), { month: "numeric", day: "numeric", weekday: "short" });
+    return diff === 0 ? t("calendar.dayLabel", { day: t("common.today"), date })
+      : diff === 1 ? t("calendar.dayLabel", { day: t("common.tomorrow"), date }) : date;
+  };
+
+  return h("div", { class: "cal" },
+    ...[...groups.values()].map((g) => h("section", { class: "cal-day" },
+      h("h3", { class: "cal-day__label" }, label(g.date)),
+      h("ul", { class: "cal-events" },
+        ...g.items.map((ev) => {
+          const ongoing = !ev.allDay && ev.start <= now && now < ev.end;
+          const item = h("a", {
+            class: "cal-event__link",
+            href: ev.link || null,
+            target: "_blank",
+            rel: "noopener noreferrer",
+            title: [ev.title, ev.location, ev.calendar].filter(Boolean).join("\n"),
+          },
+            h("span", { class: "cal-event__time" }, ev.allDay ? t("calendar.allDay") : `${time(ev.start)}–${time(ev.end)}`),
+            h("span", { class: "cal-event__dot", "aria-hidden": "true" }),
+            h("span", { class: "cal-event__title" }, ev.title),
+          );
+          if (ev.color) item.style.setProperty("--event-color", ev.color);
+          return h("li", { class: `cal-event${ongoing ? " is-now" : ""}${ev.allDay ? " is-all-day" : ""}` },
+            item,
+            ev.meet ? h("a", {
+              class: "button button--small cal-event__meet",
+              href: ev.meet,
+              target: "_blank",
+              rel: "noopener noreferrer",
+              title: t("calendar.joinMeet"),
+            }, "Meet") : null,
+          );
+        }),
+      ),
+    )),
+  );
+}
+
+function renderMail(widget) {
+  const label = MAIL_LABELS[widget.label] || MAIL_LABELS.INBOX;
+  return renderGoogleWidget(widget, {
+    cacheKey: widget.label,
+    load: (token) => fetchGmailUnread(token, widget.label),
+    view: (data) => h("a", {
+      class: "mail",
+      href: `https://mail.google.com/mail/?authuser=${encodeURIComponent(currentEmail)}#${label.hash}`,
+      target: "_blank",
+      rel: "noopener noreferrer",
+      title: t("mail.open"),
+    },
+      h("span", { class: "mail__count" }, String(data.unreadMessages)),
+      h("span", { class: "mail__label" }, t("mail.unread", { label: t(label.name) })),
+      h("span", { class: "mail__open" }, t("mail.openArrow")),
+    ),
+  });
+}
+
+/* ================================================================== */
+/* 天気                                                                 */
+/* ================================================================== */
+
+const WEATHER_REFRESH_MS = 30 * 60 * 1000;
+/** 「現在地を使う」で設定したときの place の値（保存データの目印。表示は t("weather.here")） */
+const HERE = "現在地";
+
+function renderWeather(widget) {
+  if (!widget.place && widget.lat == null) {
+    return h("p", { class: "widget__empty" }, t("weather.empty"));
+  }
+  return renderRemote(widget, {
+    // 地名で調べた緯度・経度は読み込みの途中で決まるので、キーには含めない（「現在地」のときだけ含める）
+    cacheKey: widget.place === HERE ? `here:${widget.lat},${widget.lon}` : `place:${widget.place}:${language()}`,
+    refreshMs: WEATHER_REFRESH_MS,
+    load: async () => {
+      // 地名だけ設定されていて、緯度・経度がまだなら調べて控える
+      if (widget.lat == null || widget.geocodedPlace !== widget.place) {
+        const found = await geocode(widget.place);
+        Object.assign(widget, { lat: found.lat, lon: found.lon, placeLabel: found.label, geocodedPlace: widget.place });
+        scheduleSave();
+      }
+      return fetchWeather(widget.lat, widget.lon);
+    },
+    view: (data) => renderWeatherView(widget, data),
+  });
+}
+
+function renderWeatherView(widget, { current, daily }) {
+  const now = describeWeather(current.code);
+  const icon = !current.isDay && now.icon === "☀️" ? "🌙" : now.icon;
+  const round = (n) => (n == null ? "–" : Math.round(n));
+  const weekday = (date, i) => i === 0 ? t("common.today") : i === 1 ? t("common.tomorrow")
+    : new Date(`${date}T00:00:00`).toLocaleDateString(locale(), { weekday: "short" });
+  return h("div", { class: "weather" },
+    h("div", { class: "weather__now" },
+      h("span", { class: "weather__icon", "aria-hidden": "true" }, icon),
+      h("span", { class: "weather__temp" }, `${round(current.temp)}°`),
+      h("span", { class: "weather__detail" },
+        h("span", { class: "weather__place" }, widget.place === HERE || !widget.place ? t("weather.here") : widget.placeLabel || widget.place),
+        h("span", {}, t("weather.summary", { text: now.text, max: round(daily[0]?.max), min: round(daily[0]?.min) })),
+        h("span", { class: "weather__sub" },
+          t("weather.detail", { feels: round(current.feels), humidity: round(current.humidity), wind: round(current.wind), rain: round(daily[0]?.rain) })),
+      ),
+    ),
+    h("ol", { class: "weather__days" },
+      ...daily.slice(1).map((d, i) => {
+        const w = describeWeather(d.code);
+        return h("li", { class: "weather__day", title: w.text },
+          h("span", { class: "weather__day-name" }, weekday(d.date, i + 1)),
+          h("span", { class: "weather__day-icon", "aria-label": w.text }, w.icon),
+          h("span", { class: "weather__day-temp" }, `${round(d.max)}° / ${round(d.min)}°`),
+          h("span", { class: "weather__day-rain" }, `☂ ${round(d.rain)}%`),
+        );
+      }),
+    ),
+  );
+}
+
+/* ================================================================== */
+/* タイマー・ポモドーロ                                                  */
+/* ================================================================== */
+
+/*
+ * 動いているタイマーの状態は、この端末の localStorage にだけ保存する（ほかの端末とは共有しない）。
+ * 終了時刻（endAt）で持つので、再読み込みしても続きから数える。
+ */
+const TIMER_PHASES = { work: "timer.phase.work", short: "timer.phase.short", long: "timer.phase.long", timer: "timer.phase.timer" };
+
+function timerKey(widget) {
+  return `personal-dashboard:timer:${widget.id}`;
+}
+
+function phaseMinutes(widget, phase) {
+  if (phase === "work") return widget.work;
+  if (phase === "short") return widget.short;
+  if (phase === "long") return widget.long;
+  return widget.minutes;
+}
+
+function readTimer(widget) {
+  let saved = null;
+  try { saved = JSON.parse(localStorage.getItem(timerKey(widget)) || "null"); } catch { /* 使えない環境 */ }
+  const firstPhase = widget.mode === "pomodoro" ? "work" : "timer";
+  const valid = saved && TIMER_PHASES[saved.phase] && (widget.mode === "pomodoro") === (saved.phase !== "timer");
+  if (valid) return saved;
+  return { phase: firstPhase, running: false, endAt: 0, remaining: phaseMinutes(widget, firstPhase) * 60000, count: 0 };
+}
+
+function writeTimer(widget, tm) {
+  try { localStorage.setItem(timerKey(widget), JSON.stringify(tm)); } catch { /* 使えない環境 */ }
+}
+
+function timerRemaining(tm) {
+  return tm.running ? Math.max(0, tm.endAt - Date.now()) : tm.remaining;
+}
+
+function formatDuration(ms) {
+  const total = Math.ceil(ms / 1000);
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
+
+function renderTimer(widget) {
+  const tm = readTimer(widget);
+  const running = tm.running;
+  const control = (label, aria, onclick, extra = "") => h("button", {
+    type: "button", class: `button ${extra}`, "aria-label": aria, title: aria, onclick,
+  }, label);
+
+  const start = () => {
+    requestNotificationPermission();
+    const cur = readTimer(widget);
+    writeTimer(widget, { ...cur, running: true, endAt: Date.now() + cur.remaining });
+    refreshWidgetBody(widget);
+  };
+  const pause = () => {
+    const cur = readTimer(widget);
+    writeTimer(widget, { ...cur, running: false, remaining: timerRemaining(cur) });
+    refreshWidgetBody(widget);
+  };
+  const reset = () => {
+    const first = widget.mode === "pomodoro" ? "work" : "timer";
+    writeTimer(widget, { phase: first, running: false, endAt: 0, remaining: phaseMinutes(widget, first) * 60000, count: 0 });
+    refreshWidgetBody(widget);
+  };
+  const skip = () => finishTimer(widget, { silent: true });
+
+  const total = phaseMinutes(widget, tm.phase) * 60000;
+  return h("div", { class: `timer timer--${tm.phase}${running ? " is-running" : ""}`, dataset: { widgetId: widget.id } },
+    h("div", { class: "timer__head" },
+      h("span", { class: "timer__phase" }, t(TIMER_PHASES[tm.phase])),
+      widget.mode === "pomodoro" ? h("span", { class: "timer__count", title: t("timer.count") },
+        ...Array.from({ length: widget.longEvery }, (_, i) =>
+          h("span", { class: `timer__dot${i < tm.count % widget.longEvery ? " is-done" : ""}` })),
+        h("span", { class: "timer__count-total" }, t("timer.countN", { n: tm.count }))) : null,
+    ),
+    h("span", { class: "timer__time", "aria-live": "off" }, formatDuration(timerRemaining(tm))),
+    h("span", { class: "timer__bar", "aria-hidden": "true" },
+      h("span", { class: "timer__bar-fill", style: { width: `${100 - (timerRemaining(tm) / total) * 100}%` } })),
+    h("div", { class: "timer__controls" },
+      running
+        ? control(t("timer.pause"), t("timer.pauseLabel"), pause, "button--primary")
+        : control(t("timer.start"), t("timer.startLabel"), start, "button--primary"),
+      control("↺", t("timer.reset"), reset),
+      widget.mode === "pomodoro" ? control("⏭", t("timer.skip"), skip) : null,
+    ),
+  );
+}
+
+/** 1 秒ごと：残り時間を表示し、終わったタイマーを片付ける */
+function updateTimers() {
+  if (!state) return;
+  for (const node of $$(".timer[data-widget-id]", el.dashboard)) {
+    const widget = widgets().find((w) => w.id === node.dataset.widgetId);
+    if (!widget) continue;
+    const tm = readTimer(widget);
+    const left = timerRemaining(tm);
+    $(".timer__time", node).textContent = formatDuration(left);
+    const total = phaseMinutes(widget, tm.phase) * 60000;
+    $(".timer__bar-fill", node).style.width = `${100 - (left / total) * 100}%`;
+    if (tm.running && left <= 0) finishTimer(widget);
+  }
+}
+
+function finishTimer(widget, { silent = false } = {}) {
+  const tm = readTimer(widget);
+  const name = widget.title || t("timer.phase.timer");
+  if (widget.mode !== "pomodoro") {
+    writeTimer(widget, { ...tm, running: false, endAt: 0, remaining: widget.minutes * 60000 });
+    if (!silent) notifyDone(t("timer.doneTimer", { name, n: widget.minutes }), widget);
+    refreshWidgetBody(widget);
+    return;
+  }
+  let { phase, count } = tm;
+  if (phase === "work") {
+    count += silent ? 0 : 1;
+    phase = count > 0 && count % widget.longEvery === 0 && !silent ? "long" : "short";
+  } else {
+    phase = "work";
+  }
+  const next = phaseMinutes(widget, phase) * 60000;
+  const autoStart = widget.autoNext && !silent;
+  writeTimer(widget, { phase, count, running: autoStart, endAt: autoStart ? Date.now() + next : 0, remaining: next });
+  if (!silent) {
+    notifyDone(phase === "work"
+      ? t("timer.doneBreak", { name, n: widget.work })
+      : t("timer.doneWork", { name, phase: t(TIMER_PHASES[phase]), n: phaseMinutes(widget, phase) }), widget);
+  }
+  refreshWidgetBody(widget);
+}
+
+function requestNotificationPermission() {
+  if ("Notification" in window && Notification.permission === "default") {
+    Notification.requestPermission().catch(() => {});
+  }
+}
+
+function notifyDone(message, widget) {
+  showToast(`⏰ ${message}`);
+  if (widget.sound !== false) playChime();
+  if ("Notification" in window && Notification.permission === "granted" && document.hidden) {
+    try { new Notification(t("app.notificationTitle"), { body: message, tag: `timer-${widget.id}` }); } catch { /* 使えない環境 */ }
+  }
+}
+
+/** 終了の合図の音（3 回鳴らす） */
+function playChime() {
+  try {
+    const ctx = new (window.AudioContext || window.webkitAudioContext)();
+    [0, 0.35, 0.7].forEach((delay) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, ctx.currentTime + delay);
+      gain.gain.exponentialRampToValueAtTime(0.25, ctx.currentTime + delay + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + delay + 0.3);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + delay);
+      osc.stop(ctx.currentTime + delay + 0.32);
+    });
+    setTimeout(() => ctx.close(), 1500);
+  } catch { /* 音が出せない環境 */ }
+}
+
+/* ================================================================== */
+/* 世界時計                                                              */
+/* ================================================================== */
+
+/** 新しく追加したときの都市（表示名は今の言語で zoneDefaultLabel() から付ける） */
+const DEFAULT_WORLD_ZONES = ["Asia/Tokyo", "Europe/London", "America/New_York"];
+
+function isValidTimeZone(tz) {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: tz });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** プルダウンに出す主な都市（地域ごと）。ここにないものは「すべてのタイムゾーン」から選ぶ */
+const ZONE_CHOICES = [
+  ["zone.region.asia", [
+    ["Asia/Tokyo", "東京", "Tokyo"], ["Asia/Seoul", "ソウル", "Seoul"], ["Asia/Shanghai", "北京・上海", "Beijing / Shanghai"],
+    ["Asia/Hong_Kong", "香港", "Hong Kong"], ["Asia/Taipei", "台北", "Taipei"], ["Asia/Manila", "マニラ", "Manila"],
+    ["Asia/Singapore", "シンガポール", "Singapore"], ["Asia/Kuala_Lumpur", "クアラルンプール", "Kuala Lumpur"],
+    ["Asia/Bangkok", "バンコク", "Bangkok"], ["Asia/Ho_Chi_Minh", "ハノイ・ホーチミン", "Hanoi / Ho Chi Minh City"],
+    ["Asia/Jakarta", "ジャカルタ", "Jakarta"], ["Asia/Kolkata", "ニューデリー・ムンバイ", "New Delhi / Mumbai"],
+    ["Asia/Dubai", "ドバイ", "Dubai"],
+  ]],
+  ["zone.region.oceania", [
+    ["Australia/Sydney", "シドニー", "Sydney"], ["Australia/Melbourne", "メルボルン", "Melbourne"],
+    ["Australia/Brisbane", "ブリスベン", "Brisbane"], ["Australia/Perth", "パース", "Perth"],
+    ["Pacific/Auckland", "オークランド", "Auckland"], ["Pacific/Guam", "グアム", "Guam"], ["Pacific/Honolulu", "ホノルル", "Honolulu"],
+  ]],
+  ["zone.region.europe", [
+    ["Europe/London", "ロンドン", "London"], ["Europe/Dublin", "ダブリン", "Dublin"], ["Europe/Lisbon", "リスボン", "Lisbon"],
+    ["Europe/Paris", "パリ", "Paris"], ["Europe/Berlin", "ベルリン", "Berlin"], ["Europe/Amsterdam", "アムステルダム", "Amsterdam"],
+    ["Europe/Zurich", "チューリッヒ", "Zurich"], ["Europe/Rome", "ローマ", "Rome"], ["Europe/Madrid", "マドリード", "Madrid"],
+    ["Europe/Stockholm", "ストックホルム", "Stockholm"], ["Europe/Helsinki", "ヘルシンキ", "Helsinki"],
+    ["Europe/Athens", "アテネ", "Athens"], ["Europe/Istanbul", "イスタンブール", "Istanbul"], ["Europe/Moscow", "モスクワ", "Moscow"],
+    ["Africa/Cairo", "カイロ", "Cairo"], ["Africa/Nairobi", "ナイロビ", "Nairobi"], ["Africa/Johannesburg", "ヨハネスブルグ", "Johannesburg"],
+  ]],
+  ["zone.region.americas", [
+    ["America/New_York", "ニューヨーク", "New York"], ["America/Toronto", "トロント", "Toronto"],
+    ["America/Chicago", "シカゴ", "Chicago"], ["America/Denver", "デンバー", "Denver"], ["America/Phoenix", "フェニックス", "Phoenix"],
+    ["America/Los_Angeles", "ロサンゼルス・サンフランシスコ", "Los Angeles / San Francisco"],
+    ["America/Vancouver", "シアトル・バンクーバー", "Seattle / Vancouver"], ["America/Anchorage", "アンカレッジ", "Anchorage"],
+    ["America/Mexico_City", "メキシコシティ", "Mexico City"], ["America/Sao_Paulo", "サンパウロ", "São Paulo"],
+    ["America/Argentina/Buenos_Aires", "ブエノスアイレス", "Buenos Aires"],
+  ]],
+  ["zone.region.other", [["UTC", "協定世界時（UTC）", "Coordinated Universal Time (UTC)"]]],
+];
+
+/** 主な都市のタイムゾーン → 都市名 */
+const ZONE_CITY = new Map(ZONE_CHOICES.flatMap(([, list]) => list.map(([tz, ja, en]) => [tz, { ja, en }])));
+
+/** 「UTC+9」のような時差の表記（夏時間は今日の時点のもの） */
+function utcOffsetLabel(tz) {
+  try {
+    const name = new Intl.DateTimeFormat("en-US", { timeZone: tz, timeZoneName: "shortOffset" })
+      .formatToParts(new Date()).find((p) => p.type === "timeZoneName")?.value || "";
+    const offset = name.replace(/^GMT/, "");
+    return offset ? `UTC${offset.replace("-", "−")}` : "UTC±0";
+  } catch {
+    return "";
+  }
+}
+
+let zoneOptionsCache = null; // { lang, groups }
+
+/** プルダウンの中身（毎回作り直すと重いので、一度作ったものを複製して使う） */
+function zoneOptionGroups() {
+  if (zoneOptionsCache?.lang !== language()) {
+    const withOffset = (text, tz) => {
+      const offset = utcOffsetLabel(tz);
+      return offset ? t("common.withParen", { text, note: offset }) : text;
+    };
+    const groups = ZONE_CHOICES.map(([region, list]) => h("optgroup", { label: t(region) },
+      ...list.filter(([tz]) => isValidTimeZone(tz))
+        .map(([tz, ja, en]) => h("option", { value: tz }, withOffset(localized({ ja, en }), tz)))));
+    let all = [];
+    try { all = Intl.supportedValuesOf("timeZone"); } catch { /* 古いブラウザ：主な都市だけ */ }
+    const others = all.filter((tz) => !ZONE_CITY.has(tz));
+    if (others.length) {
+      groups.push(h("optgroup", { label: t("zone.all") },
+        ...others.map((tz) => h("option", { value: tz }, withOffset(tz.replace(/_/g, " "), tz)))));
+    }
+    zoneOptionsCache = { lang: language(), groups };
+  }
+  return zoneOptionsCache.groups.map((g) => g.cloneNode(true));
+}
+
+/** タイムゾーンのプルダウンに中身を入れて、値を選ぶ（一覧にない値も選べるように足す） */
+function fillZoneSelect(select, value, firstOption) {
+  select.replaceChildren(firstOption, ...zoneOptionGroups());
+  if (value && ![...select.options].some((o) => o.value === value)) {
+    select.append(h("option", { value }, value));
+  }
+  select.value = value || "";
+}
+
+/** タイムゾーンから自動で付ける表示名 */
+function zoneDefaultLabel(tz) {
+  const city = ZONE_CITY.get(tz);
+  return city ? localized(city) : tz.split("/").pop().replace(/_/g, " ");
+}
+
+/** 世界時計の設定欄に、都市 1 行を足す */
+function addZoneRow(zone) {
+  const label = h("input", { class: "input", name: "zoneLabel", placeholder: t("link.title"), "aria-label": t("link.title") });
+  const select = h("select", { class: "input", name: "zoneTz", "aria-label": t("dialog.timeZone") });
+  fillZoneSelect(select, zone?.tz || "", h("option", { value: "" }, t("zone.choose")));
+  label.value = zone?.label || "";
+  // 表示名を自分で変えていなければ、選んだ都市の名前に合わせる
+  let autoLabel = zone ? zoneDefaultLabel(zone.tz) : "";
+  select.addEventListener("change", () => {
+    if (!label.value.trim() || label.value === autoLabel) {
+      autoLabel = select.value ? zoneDefaultLabel(select.value) : "";
+      label.value = autoLabel;
+    }
+  });
+  const row = h("li", { class: "zone-list__row" }, label, select,
+    h("button", {
+      type: "button", class: "button button--icon button--ghost", title: t("zone.remove"), "aria-label": t("zone.remove"),
+      onclick: () => row.remove(),
+    }, "×"));
+  $("#world-zone-list").append(row);
+  return row;
+}
+
+$("#world-zone-add").addEventListener("click", () => {
+  $("select", addZoneRow(null)).focus();
+});
+
+function renderWorldClock(widget) {
+  if (widget.zones.length === 0) {
+    return h("p", { class: "widget__empty" }, t("worldclock.empty"));
+  }
+  return h("ul", { class: "wclock" },
+    ...widget.zones.map((z) => h("li", { class: "wclock__row", dataset: { tz: z.tz } },
+      h("span", { class: "wclock__icon", "aria-hidden": "true" }),
+      h("span", { class: "wclock__label" }, z.label),
+      h("span", { class: "wclock__time" }),
+      h("span", { class: "wclock__diff" }),
+    )),
+  );
+}
+
+function zonedParts(date, tz) {
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-US", {
+    timeZone: tz, year: "numeric", month: "numeric", day: "numeric", hour: "numeric", minute: "numeric", hourCycle: "h23",
+  }).formatToParts(date).map((p) => [p.type, p.value]));
+  return { y: +parts.year, mo: +parts.month, d: +parts.day, h: +parts.hour, mi: +parts.minute };
+}
+
+function updateWorldClocks(now) {
+  const rows = $$(".wclock__row", el.dashboard);
+  if (rows.length === 0) return;
+  const local = { y: now.getFullYear(), mo: now.getMonth() + 1, d: now.getDate(), h: now.getHours(), mi: now.getMinutes() };
+  const minutesOf = (p) => Date.UTC(p.y, p.mo - 1, p.d, p.h, p.mi) / 60000;
+  for (const row of rows) {
+    const tz = row.dataset.tz;
+    let p;
+    try { p = zonedParts(now, tz); } catch { continue; }
+    $(".wclock__time", row).textContent = `${String(p.h).padStart(2, "0")}:${String(p.mi).padStart(2, "0")}`;
+    $(".wclock__icon", row).textContent = p.h >= 6 && p.h < 18 ? "☀️" : "🌙";
+    const diffMin = minutesOf(p) - minutesOf(local);
+    const dayDiff = Date.UTC(p.y, p.mo - 1, p.d) / 86400000 - Date.UTC(local.y, local.mo - 1, local.d) / 86400000;
+    const hours = diffMin / 60;
+    const sign = hours > 0 ? "+" : hours < 0 ? "−" : "±";
+    const abs = Math.abs(hours);
+    const offset = Number.isInteger(abs) ? `${abs}` : abs.toFixed(1);
+    const day = dayDiff === 0 ? t("common.today") : dayDiff > 0 ? t("common.tomorrow") : t("common.yesterday");
+    $(".wclock__diff", row).textContent = t("worldclock.diff", { day, diff: `${sign}${offset}` });
+  }
+}
+
+/* ================================================================== */
+/* 習慣トラッカー                                                        */
+/* ================================================================== */
+
+const HABIT_DAYS = [7, 14];
+
+function dateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** 今日（記録がまだなら昨日）から、続けて記録した日数 */
+function habitStreak(done) {
+  const day = new Date();
+  if (!done.has(dateKey(day))) day.setDate(day.getDate() - 1);
+  let streak = 0;
+  while (done.has(dateKey(day))) {
+    streak += 1;
+    day.setDate(day.getDate() - 1);
+  }
+  return streak;
+}
+
+function renderHabit(widget) {
+  if (widget.habits.length === 0) {
+    return h("p", { class: "widget__empty" },
+      editing ? t("habit.emptyEditing") : t("habit.empty"));
+  }
+  const today = new Date();
+  const days = Array.from({ length: widget.days }, (_, i) => {
+    const d = new Date(today);
+    d.setDate(d.getDate() - (widget.days - 1 - i));
+    return d;
+  });
+  const head = h("tr", {},
+    h("th", { class: "habit__name-head", scope: "col" }, ""),
+    ...days.map((d, i) => h("th", { scope: "col", class: i === days.length - 1 ? "is-today" : "" },
+      h("span", { class: "habit__dow" }, d.toLocaleDateString(locale(), { weekday: "narrow" })),
+      h("span", { class: "habit__date" }, String(d.getDate())))),
+    h("th", { scope: "col", class: "habit__streak-head", title: t("habit.streakTitle") }, t("habit.streak")),
+  );
+  const rows = widget.habits.map((habit) => {
+    const done = new Set(widget.log[habit.id] || []);
+    return h("tr", { dataset: { id: habit.id } },
+      h("th", { scope: "row", class: "habit__name" },
+        h("span", { class: "habit__name-text" }, habit.name),
+        h("span", { class: "habit__tools" },
+          h("button", {
+            type: "button", class: "button button--small button--ghost", "aria-label": t("habit.renameAria", { name: habit.name }), title: t("common.rename"),
+            onclick: async () => {
+              const name = await askText({ title: t("habit.renameTitle"), label: t("habit.label"), value: habit.name });
+              if (!name) return;
+              habit.name = name;
+              commit();
+            },
+          }, "✎"),
+          h("button", {
+            type: "button", class: "button button--small button--ghost button--danger", "aria-label": t("habit.deleteAria", { name: habit.name }), title: t("common.delete"),
+            onclick: () => {
+              if (!confirm(t("habit.deleteConfirm", { name: habit.name }))) return;
+              widget.habits = widget.habits.filter((x) => x.id !== habit.id);
+              delete widget.log[habit.id];
+              commit();
+            },
+          }, "×"),
+        ),
+      ),
+      ...days.map((d, i) => {
+        const key = dateKey(d);
+        const on = done.has(key);
+        return h("td", { class: i === days.length - 1 ? "is-today" : "" },
+          h("button", {
+            type: "button",
+            class: `habit__cell${on ? " is-done" : ""}`,
+            "aria-pressed": String(on),
+            "aria-label": `${habit.name}: ${d.toLocaleDateString(locale(), { month: "numeric", day: "numeric" })}`,
+            onclick: () => {
+              const set = new Set(widget.log[habit.id] || []);
+              if (set.has(key)) set.delete(key);
+              else set.add(key);
+              widget.log[habit.id] = pruneHabitLog([...set]);
+              commit();
+            },
+          }, on ? "✓" : ""),
+        );
+      }),
+      h("td", { class: "habit__streak" }, (() => {
+        const s = habitStreak(done);
+        return s > 0 ? `🔥${s}` : "–";
+      })()),
+    );
+  });
+  return h("div", { class: "habit" },
+    h("table", { class: "habit__table" }, h("thead", {}, head), h("tbody", {}, ...rows)));
+}
+
+/** 記録は 1 年分だけ残す（データが大きくなりすぎないように） */
+function pruneHabitLog(keys) {
+  const limit = new Date();
+  limit.setDate(limit.getDate() - 400);
+  const min = dateKey(limit);
+  return keys.filter((k) => k >= min).sort();
+}
+
+async function addHabit(widget) {
+  const name = await askText({ title: t("habit.add"), label: t("habit.addLabel"), value: "" });
+  if (!name) return;
+  widget.habits.push({ id: uid(), name });
+  commit();
+}
+
+/* ================================================================== */
+/* GitHub                                                               */
+/* ================================================================== */
+
+const GITHUB_TOKEN_KEY = "personal-dashboard:github-token";
+const GITHUB_REFRESH_MS = 5 * 60 * 1000;
+
+function getGitHubToken() {
+  try { return localStorage.getItem(GITHUB_TOKEN_KEY) || ""; } catch { return ""; }
+}
+
+function setGitHubToken(token) {
+  try {
+    if (token) localStorage.setItem(GITHUB_TOKEN_KEY, token);
+    else localStorage.removeItem(GITHUB_TOKEN_KEY);
+  } catch { /* 使えない環境 */ }
+  // GitHub のウィジェットだけ読み込み直す（天気などの控えは残す）
+  for (const w of widgets()) if (w.type === "github") googleCache.delete(w.id);
+}
+
+async function askGitHubToken() {
+  const token = await askText({
+    title: t("github.tokenTitle"),
+    label: t("github.tokenLabel"),
+    value: "",
+  });
+  if (!token) return;
+  setGitHubToken(token);
+  refreshRemoteWidgets();
+}
+
+function refreshRemoteWidgets() {
+  for (const widget of widgets()) {
+    if (REMOTE_WIDGETS.includes(widget.type)) refreshWidgetBody(widget);
+  }
+}
+
+function renderGitHub(widget) {
+  const token = getGitHubToken();
+  if (!token) {
+    return h("div", { class: "google-connect" },
+      h("p", { class: "widget__empty" },
+        t("github.needToken")),
+      h("button", { type: "button", class: "button button--primary", onclick: askGitHubToken }, t("github.setToken")),
+    );
+  }
+  if (widget.lists.length === 0) {
+    return h("p", { class: "widget__empty" }, t("github.chooseLists"));
+  }
+  return renderRemote(widget, {
+    cacheKey: `${widget.lists.join(",")}:${widget.limit}:${token.length}`,
+    refreshMs: GITHUB_REFRESH_MS,
+    load: () => fetchGitHub(token, widget.lists, widget.limit),
+    onError: (err) => {
+      if (err.unauthorized) {
+        setGitHubToken("");
+        showToast(err.message);
+      }
+    },
+    view: (data) => renderGitHubLists(data),
+  });
+}
+
+function relativeTime(date) {
+  if (!date) return "";
+  const min = Math.round((Date.now() - date) / 60000);
+  if (min < 60) return t("common.minutesAgo", { n: Math.max(min, 1) });
+  const hours = Math.round(min / 60);
+  if (hours < 24) return t("common.hoursAgo", { n: hours });
+  const days = Math.round(hours / 24);
+  return days < 30 ? t("common.daysAgo", { n: days }) : date.toLocaleDateString(locale());
+}
+
+function renderGitHubLists({ lists }) {
+  return h("div", { class: "gh" },
+    ...lists.map((list) => h("section", { class: "gh-list" },
+      h("h3", { class: "gh-list__label" }, list.label, h("span", { class: "gh-list__count" }, String(list.total))),
+      list.items.length === 0
+        ? h("p", { class: "gh-list__empty" }, t("common.none"))
+        : h("ul", { class: "gh-items" },
+          ...list.items.map((it) => h("li", { class: "gh-item" },
+            h("a", { class: "gh-item__link", href: it.url, target: "_blank", rel: "noopener noreferrer", title: it.title },
+              h("span", { class: "gh-item__title" }, it.draft ? `[Draft] ${it.title}` : it.title),
+              h("span", { class: "gh-item__meta" }, `${it.repo} #${it.number} · ${relativeTime(it.updated)}`),
+            ),
+          ))),
+    )),
+  );
+}
+
+/* ================================================================== */
+/* ウィジェットの設定欄（種類ごと）                                        */
+/* ================================================================== */
+
+/*
+ * normalize：読み込んだデータの補正 / init：新しく作るときの初期値
+ * fill：編集ダイアログに今の値を入れる（widget が null なら初期値）/ save：ダイアログの値を保存
+ */
+const WIDGET_FORMS = {
+  notice: {
+    init: (w) => { w.scope = "all"; },
+    normalize: (w) => { w.scope = typeof w.scope === "string" && w.scope ? w.scope : "all"; },
+    fill: (f, w) => {
+      const options = [h("option", { value: "all" }, t("notice.scopeAll"))];
+      for (const u of storage.unitList()) options.push(h("option", { value: u.id }, u.name));
+      // 組織のタブに置くときは、その組織を最初から選んでおく
+      const scope = w?.scope || page().unit || "all";
+      if (scope !== "all" && !storage.unitById(scope)) options.push(h("option", { value: scope }, t("notice.scopeMissing")));
+      f.noticeScope.replaceChildren(...options);
+      f.noticeScope.value = scope;
+    },
+    save: (f, w) => { w.scope = f.noticeScope.value || "all"; },
+  },
+  yamato: {
+    init: (w) => { w.recent = []; },
+    normalize: (w) => {
+      w.recent = (Array.isArray(w.recent) ? w.recent : [])
+        .filter((r) => r && /^\d{10,12}$/.test(String(r.number)))
+        .map((r) => ({ number: String(r.number), at: Number(r.at) || 0 }))
+        .slice(0, YAMATO_RECENT);
+    },
+    fill: () => {},
+    save: () => {},
+  },
+  weather: {
+    normalize: (w) => {
+      w.place = typeof w.place === "string" ? w.place : "";
+      if (typeof w.lat !== "number" || typeof w.lon !== "number") { delete w.lat; delete w.lon; }
+    },
+    fill: (f, w) => {
+      f.weatherPlace.value = w?.place || "";
+      f.weatherLat.value = w?.lat ?? "";
+      f.weatherLon.value = w?.lon ?? "";
+    },
+    save: (f, w) => {
+      const place = f.weatherPlace.value.trim();
+      const lat = Number(f.weatherLat.value);
+      const lon = Number(f.weatherLon.value);
+      if (f.weatherLat.value !== "" && Number.isFinite(lat) && Number.isFinite(lon)) {
+        // 「現在地を使う」で緯度・経度が入っている
+        const here = !place || place === t("weather.here") ? HERE : place;
+        Object.assign(w, { place: here, lat, lon, placeLabel: here, geocodedPlace: here });
+      } else if (place !== w.place) {
+        Object.assign(w, { place });
+        delete w.lat; delete w.lon; delete w.placeLabel; delete w.geocodedPlace;
+      }
+    },
+  },
+  timer: {
+    normalize: (w) => {
+      const num = (v, d, min, max) => Math.min(max, Math.max(min, Math.round(Number(v)) || d));
+      w.mode = w.mode === "timer" ? "timer" : "pomodoro";
+      w.work = num(w.work, 25, 1, 180);
+      w.short = num(w.short, 5, 1, 60);
+      w.long = num(w.long, 15, 1, 120);
+      w.longEvery = num(w.longEvery, 4, 2, 8);
+      w.minutes = num(w.minutes, 10, 1, 600);
+      w.autoNext = Boolean(w.autoNext);
+      w.sound = w.sound !== false;
+    },
+    fill: (f, w) => {
+      f.timerMode.value = w?.mode || "pomodoro";
+      f.timerWork.value = w?.work ?? 25;
+      f.timerShort.value = w?.short ?? 5;
+      f.timerLong.value = w?.long ?? 15;
+      f.timerLongEvery.value = w?.longEvery ?? 4;
+      f.timerMinutes.value = w?.minutes ?? 10;
+      f.timerAutoNext.checked = Boolean(w?.autoNext);
+      f.timerSound.checked = w?.sound !== false;
+    },
+    save: (f, w) => {
+      const before = JSON.stringify([w.mode, w.work, w.short, w.long, w.minutes]);
+      Object.assign(w, {
+        mode: f.timerMode.value,
+        work: f.timerWork.value,
+        short: f.timerShort.value,
+        long: f.timerLong.value,
+        longEvery: f.timerLongEvery.value,
+        minutes: f.timerMinutes.value,
+        autoNext: f.timerAutoNext.checked,
+        sound: f.timerSound.checked,
+      });
+      WIDGET_FORMS.timer.normalize(w);
+      // 時間の設定を変えたら、止まっているタイマーは新しい時間で始め直す
+      if (before !== JSON.stringify([w.mode, w.work, w.short, w.long, w.minutes]) && !readTimer(w).running) {
+        try { localStorage.removeItem(timerKey(w)); } catch { /* 使えない環境 */ }
+      }
+    },
+  },
+  worldclock: {
+    init: (w) => { w.zones = DEFAULT_WORLD_ZONES.map((tz) => ({ id: uid(), tz, label: zoneDefaultLabel(tz) })); },
+    normalize: (w) => {
+      w.zones = (Array.isArray(w.zones) ? w.zones : [])
+        .filter((z) => z && typeof z.tz === "string" && isValidTimeZone(z.tz))
+        .map((z) => ({ id: z.id ? String(z.id) : uid(), label: typeof localText(z.label) === "string" ? localText(z.label) : z.tz, tz: z.tz }));
+    },
+    fill: (f, w) => {
+      $("#world-zone-list").replaceChildren();
+      for (const zone of w ? w.zones : DEFAULT_WORLD_ZONES.map((tz) => ({ tz, label: zoneDefaultLabel(tz) }))) addZoneRow(zone);
+    },
+    save: (f, w) => {
+      w.zones = $$(".zone-list__row", el.widgetForm)
+        .map((row) => ({ tz: $("select", row).value, label: $("input", row).value.trim() }))
+        .filter((z) => z.tz && isValidTimeZone(z.tz))
+        .map((z) => ({ id: uid(), label: z.label || zoneDefaultLabel(z.tz), tz: z.tz }));
+    },
+  },
+  habit: {
+    init: (w) => { w.habits = []; w.log = {}; },
+    normalize: (w) => {
+      w.habits = (Array.isArray(w.habits) ? w.habits : [])
+        .filter((x) => x && typeof x.name === "string")
+        .map((x) => ({ id: x.id ? String(x.id) : uid(), name: x.name }));
+      const log = w.log && typeof w.log === "object" ? w.log : {};
+      w.log = {};
+      for (const habit of w.habits) {
+        const keys = Array.isArray(log[habit.id]) ? log[habit.id].filter((k) => /^\d{4}-\d{2}-\d{2}$/.test(k)) : [];
+        if (keys.length) w.log[habit.id] = pruneHabitLog(keys);
+      }
+      w.days = HABIT_DAYS.includes(Number(w.days)) ? Number(w.days) : 7;
+    },
+    fill: (f, w) => { f.habitDays.value = String(w?.days || 7); },
+    save: (f, w) => { w.days = HABIT_DAYS.includes(Number(f.habitDays.value)) ? Number(f.habitDays.value) : 7; },
+  },
+  github: {
+    normalize: (w) => {
+      w.lists = (Array.isArray(w.lists) ? w.lists : ["review", "mine", "assigned"]).filter((k) => GITHUB_LISTS[k]);
+      w.limit = [5, 10, 20].includes(Number(w.limit)) ? Number(w.limit) : 5;
+    },
+    fill: (f, w) => {
+      const lists = w ? w.lists : ["review", "mine", "assigned"];
+      for (const box of f.githubLists) box.checked = lists.includes(box.value);
+      f.githubLimit.value = String(w?.limit || 5);
+      $("#github-token-state").textContent = getGitHubToken()
+        ? t("dialog.githubTokenSet")
+        : t("dialog.githubTokenUnset");
+      $("#github-token-clear").hidden = !getGitHubToken();
+    },
+    save: (f, w) => {
+      w.lists = [...f.githubLists].filter((b) => b.checked).map((b) => b.value);
+      w.limit = [5, 10, 20].includes(Number(f.githubLimit.value)) ? Number(f.githubLimit.value) : 5;
+    },
+  },
+};
+
+/* ================================================================== */
+/* お知らせ                                                              */
+/* ================================================================== */
+/*
+ * お知らせの元は、組織のスプレッドシートの「お知らせ」シート（js_storage.html の getNotices）。
+ * 既読は人ごとにサーバーに覚えておく。組織の編集者は、ウィジェットから投稿・削除できる。
+ */
+
+/** 開いている（本文を表示している）お知らせ。描き直しても開いたままにする */
+const openNotices = new Set();
+
+function noticeDate(n) {
+  const value = n.postedAt || n.start;
+  if (!value) return "";
+  const d = new Date(value.length === 10 ? `${value}T00:00:00` : value);
+  return Number.isNaN(d.getTime()) ? "" : d.toLocaleDateString(locale(), { month: "numeric", day: "numeric" });
+}
+
+/** そのウィジェットから投稿できる組織 */
+function postableUnits(widget) {
+  return storage.unitList().filter((u) => u.canEdit && (widget.scope === "all" || widget.scope === u.id));
+}
+
+function renderNotice(widget) {
+  const list = storage.getNotices(widget.scope);
+  const unread = list.filter((n) => !storage.isNoticeRead(n.id));
+  const showUnit = widget.scope === "all" && storage.unitList().length > 1;
+  const canPost = postableUnits(widget).length > 0;
+
+  const bar = h("div", { class: "notice__bar" },
+    h("span", { class: "notice__count" },
+      unread.length ? h("strong", {}, t("notice.unread", { n: unread.length })) : t("notice.allRead")),
+    h("span", { class: "notice__bar-spacer" }),
+    unread.length ? h("button", {
+      type: "button",
+      class: "button button--small button--ghost",
+      onclick: () => storage.markNoticesRead(unread.map((n) => n.id)),
+    }, t("notice.markAllRead")) : null,
+    canPost ? h("button", {
+      type: "button",
+      class: "button button--small",
+      onclick: () => openNoticeForm(widget),
+    }, t("notice.post")) : null,
+  );
+
+  if (list.length === 0) {
+    return h("div", { class: "notice" }, bar, h("p", { class: "widget__empty" }, t("notice.empty")));
+  }
+
+  const items = list.map((n) => {
+    const read = storage.isNoticeRead(n.id);
+    const details = h("details", {
+      open: openNotices.has(n.id),
+      ontoggle: () => {
+        if (details.open) {
+          openNotices.add(n.id);
+          storage.markNoticesRead([n.id]);
+        } else {
+          openNotices.delete(n.id);
+        }
+      },
+    },
+      h("summary", {},
+        h("span", { class: "notice-item__dot", "aria-hidden": "true" }),
+        h("span", { class: "notice-item__title" },
+          n.important ? h("span", { class: "notice-item__important" }, t("notice.important")) : null,
+          n.title,
+          read ? null : h("span", { class: "visually-hidden" }, t("notice.unreadLabel"))),
+        h("span", { class: "notice-item__meta" },
+          [showUnit ? n.unitName : null, noticeDate(n), n.end ? t("notice.until", { date: n.end }) : null].filter(Boolean).join(" · ")),
+      ),
+    );
+    const body = h("div", { class: "notice-item__body" });
+    const html = n.body ? markdownToHtml(n.body) : null;
+    if (html != null) body.innerHTML = html;
+    else body.textContent = n.body || "";
+    for (const a of $$("a", body)) {
+      a.target = "_blank";
+      a.rel = "noopener noreferrer";
+    }
+    details.append(body);
+    if (storage.canEditUnit(n.unitId)) {
+      details.append(h("div", { class: "notice-item__actions" },
+        h("button", {
+          type: "button",
+          class: "button button--small button--ghost button--danger",
+          onclick: () => removeNotice(n),
+        }, t("notice.delete"))));
+    }
+    return h("li", { class: `notice-item${read ? "" : " is-unread"}${n.important ? " is-important" : ""}` }, details);
+  });
+
+  return h("div", { class: "notice" }, bar, h("ul", { class: "notice-list" }, ...items));
+}
+
+async function removeNotice(n) {
+  if (!confirm(t("notice.deleteConfirm", { title: n.title }))) return;
+  try {
+    await storage.deleteNotice(n);
+    showToast(t("notice.deleted"));
+  } catch (err) {
+    showToast(err.message);
+  }
+}
+
+/** お知らせの投稿ダイアログ（初めて開くときに作る） */
+let noticeDialog = null;
+
+function openNoticeForm(widget) {
+  const unitsForPost = postableUnits(widget);
+  if (!unitsForPost.length) return;
+  noticeDialog?.remove();
+  const form = h("form", { method: "dialog", class: "dialog__body notice-form" },
+    h("h2", { class: "dialog__title" }, t("notice.postTitle")),
+    h("label", { class: "field", hidden: unitsForPost.length === 1 },
+      h("span", { class: "field__label" }, t("notice.postTo")),
+      h("select", { class: "input", name: "unit" }, ...unitsForPost.map((u) => h("option", { value: u.id }, u.name)))),
+    h("label", { class: "field" },
+      h("span", { class: "field__label" }, t("notice.titleLabel")),
+      h("input", { class: "input", name: "title", required: true, maxlength: "120" })),
+    h("label", { class: "field" },
+      h("span", { class: "field__label" }, t("notice.bodyLabel")),
+      h("textarea", { class: "input", name: "body", maxlength: "5000" }),
+      h("span", { class: "field__hint" }, t("notice.bodyHint"))),
+    h("label", { class: "checkbox" },
+      h("input", { type: "checkbox", name: "important" }), " ", h("span", {}, t("notice.importantLabel"))),
+    h("div", { class: "field__row" },
+      h("label", { class: "field" },
+        h("span", { class: "field__label" }, t("notice.startLabel")),
+        h("input", { class: "input", type: "date", name: "start" })),
+      h("label", { class: "field" },
+        h("span", { class: "field__label" }, t("notice.endLabel")),
+        h("input", { class: "input", type: "date", name: "end" }))),
+    h("p", { class: "field__hint" }, t("notice.audienceHint")),
+    h("div", { class: "dialog__actions" },
+      h("span", { class: "dialog__spacer" }),
+      h("button", { value: "cancel", class: "button", formnovalidate: true }, t("common.cancel")),
+      h("button", { value: "ok", class: "button button--primary" }, t("notice.postButton"))),
+  );
+  noticeDialog = h("dialog", { class: "dialog" }, form);
+  const preset = page().unit && unitsForPost.some((u) => u.id === page().unit) ? page().unit : unitsForPost[0].id;
+  form.elements.unit.value = preset;
+  document.body.append(noticeDialog);
+
+  form.addEventListener("submit", async (event) => {
+    if (event.submitter?.value !== "ok") return;
+    event.preventDefault();
+    const f = form.elements;
+    const submit = event.submitter;
+    submit.disabled = true;
+    try {
+      await storage.postNotice(f.unit.value, {
+        title: f.title.value.trim(),
+        body: f.body.value,
+        important: f.important.checked,
+        start: f.start.value,
+        end: f.end.value,
+      });
+      noticeDialog.close("posted");
+      showToast(t("notice.posted"));
+    } catch (err) {
+      alert(err.message);
+    } finally {
+      submit.disabled = false;
+    }
+  });
+  noticeDialog.addEventListener("close", () => { noticeDialog.remove(); noticeDialog = null; });
+  noticeDialog.showModal();
+}
+
+/** お知らせのウィジェットだけを描き直す（入力中・ドラッグ中などは邪魔しない） */
+function refreshNoticeWidgets() {
+  if (!state) return;
+  renderNoticeBar();
+  for (const widget of widgets()) {
+    if (widget.type === "notice") refreshWidgetBody(widget);
+  }
+}
+
+/** 未読の「重要」なお知らせを、画面の上に帯で出す（いちばん新しい 1 件） */
+function renderNoticeBar() {
+  const bar = $("#notice-bar");
+  if (!bar || !state) return;
+  const unreadImportant = storage.getNotices("all").filter((n) => n.important && !storage.isNoticeRead(n.id));
+  const n = unreadImportant[0];
+  if (!n) {
+    bar.hidden = true;
+    bar.replaceChildren();
+    return;
+  }
+  bar.hidden = false;
+  bar.replaceChildren(
+    h("span", { class: "notice-bar__label" }, t("notice.important")),
+    h("span", { class: "notice-bar__title" },
+      storage.unitList().length > 1 ? `${n.title}（${n.unitName}）` : n.title,
+      unreadImportant.length > 1 ? `　${t("notice.moreImportant", { n: unreadImportant.length - 1 })}` : ""),
+    h("button", { type: "button", class: "button button--small", onclick: () => showNoticeDetail(n) }, t("notice.read")),
+    h("button", {
+      type: "button",
+      class: "button button--small button--ghost",
+      title: t("notice.markRead"),
+      "aria-label": t("notice.markRead"),
+      onclick: () => storage.markNoticesRead([n.id]),
+    }, "×"),
+  );
+}
+
+/** お知らせ 1 件を、ダイアログで読む（重要なお知らせの帯から） */
+function showNoticeDetail(n) {
+  const body = h("div", { class: "notice-item__body" });
+  const html = n.body ? markdownToHtml(n.body) : null;
+  if (html != null) body.innerHTML = html;
+  else body.textContent = n.body || "";
+  for (const a of $$("a", body)) {
+    a.target = "_blank";
+    a.rel = "noopener noreferrer";
+  }
+  const dialog = h("dialog", { class: "dialog" },
+    h("form", { method: "dialog", class: "dialog__body" },
+      h("h2", { class: "dialog__title" }, n.title),
+      h("p", { class: "field__hint" }, [n.unitName, noticeDate(n), n.author].filter(Boolean).join(" · ")),
+      body,
+      h("div", { class: "dialog__actions" },
+        h("span", { class: "dialog__spacer" }),
+        h("button", { value: "ok", class: "button button--primary" }, t("common.close")))),
+  );
+  dialog.addEventListener("close", () => dialog.remove());
+  document.body.append(dialog);
+  dialog.showModal();
+  storage.markNoticesRead([n.id]);
+}
+
+storage.onNoticesChanged(() => refreshNoticeWidgets());
+
+/* ================================================================== */
+/* ToDo                                                                 */
+/* ================================================================== */
+
+function renderTodo(widget) {
+  const cats = widget.categories;
+  const wrap = h("div", { class: "todo" });
+  if (cats.length === 0) {
+    wrap.append(h("p", { class: "widget__empty" },
+      editing ? t("todo.emptyEditing") : t("todo.emptyCategories")));
+    return wrap;
+  }
+
+  // 編集モードでは並べ替えのため、すべてのカテゴリーを表示する
+  let filter = editing ? "all" : todoFilters.get(widget.id) || "all";
+  if (filter !== "all" && !cats.some((c) => c.id === filter)) filter = "all";
+
+  // 追加フォーム
+  const input = h("input", {
+    class: "input todo__input",
+    type: "text",
+    placeholder: t("todo.placeholder"),
+    "aria-label": t("todo.inputLabel"),
+    maxlength: "200",
+    "data-todo-input": widget.id,
+  });
+  const select = h("select", { class: "input todo__select", "aria-label": t("todo.category") },
+    ...cats.map((c) => h("option", { value: c.id }, c.name)));
+  select.value = filter !== "all"
+    ? filter
+    : cats.some((c) => c.id === widget.lastCategoryId) ? widget.lastCategoryId : cats[0].id;
+  if (cats.length === 1) select.hidden = true;
+  const form = h("form", { class: "todo__form" },
+    input, select, h("button", { class: "button button--primary", type: "submit" }, t("common.add")));
+  form.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const text = input.value.trim();
+    if (!text) return;
+    widget.items.push({ id: uid(), text, done: false, categoryId: select.value });
+    widget.lastCategoryId = select.value;
+    focusAfterRender = `[data-todo-input="${widget.id}"]`;
+    commit();
+  });
+  wrap.append(form);
+
+  // カテゴリーの絞り込み
+  if (!editing && cats.length > 1) {
+    const chip = (id, label, count) => h("button", {
+      type: "button",
+      class: "todo-chip",
+      "aria-pressed": String(filter === id),
+      onclick: () => { todoFilters.set(widget.id, id); render(); },
+    }, label, count ? h("span", { class: "todo-chip__count" }, count) : null);
+    const remaining = (id) => widget.items.filter((i) => !i.done && (id === "all" || i.categoryId === id)).length;
+    wrap.append(h("div", { class: "todo__chips", role: "group", "aria-label": t("todo.filter") },
+      chip("all", t("todo.all"), remaining("all")),
+      ...cats.map((c) => chip(c.id, c.name, remaining(c.id))),
+    ));
+  }
+
+  // カテゴリーごとの一覧
+  const shown = filter === "all" ? cats : cats.filter((c) => c.id === filter);
+  const groups = h("div", { class: "todo__groups", dataset: { widgetId: widget.id } });
+  for (const cat of shown) {
+    const items = widget.items.filter((i) => i.categoryId === cat.id);
+    const left = items.filter((i) => !i.done).length;
+    const list = h("ul", { class: "todo-list", dataset: { categoryId: cat.id } },
+      ...items.map((item) => renderTodoItem(widget, item)));
+    groups.append(h("section", { class: "todo-group", dataset: { categoryId: cat.id } },
+      h("header", { class: "todo-group__header" },
+        h("span", { class: "todo-group__handle", title: t("todo.categoryDrag"), "aria-hidden": "true" }, "⠿"),
+        h("span", { class: "todo-group__name" }, cat.name),
+        h("span", { class: "todo-group__count", title: t("todo.countTitle") }, `${left}/${items.length}`),
+        h("span", { class: "todo-group__tools" },
+          h("button", {
+            type: "button",
+            class: "button button--small button--ghost",
+            "aria-label": t("todo.renameCategoryAria", { name: cat.name }),
+            title: t("common.rename"),
+            onclick: () => renameTodoCategory(widget, cat),
+          }, "✎"),
+          h("button", {
+            type: "button",
+            class: "button button--small button--ghost button--danger",
+            "aria-label": t("todo.deleteCategoryAria", { name: cat.name }),
+            title: t("todo.deleteCategory"),
+            onclick: () => deleteTodoCategory(widget, cat),
+          }, "×"),
+        ),
+      ),
+      list,
+      items.length === 0 && !editing ? h("p", { class: "todo-group__empty" }, t("todo.empty")) : null,
+    ));
+  }
+  wrap.append(groups);
+
+  // 完了したものの一括削除
+  const shownIds = new Set(shown.map((c) => c.id));
+  const doneCount = widget.items.filter((i) => i.done && shownIds.has(i.categoryId)).length;
+  if (doneCount > 0) {
+    wrap.append(h("div", { class: "todo__footer" },
+      h("button", {
+        type: "button",
+        class: "button button--small button--ghost",
+        onclick: () => {
+          widget.items = widget.items.filter((i) => !(i.done && shownIds.has(i.categoryId)));
+          commit();
+        },
+      }, t("todo.clearDone", { n: doneCount })),
+    ));
+  }
+  return wrap;
+}
+
+function renderTodoItem(widget, item) {
+  const check = h("input", {
+    type: "checkbox",
+    class: "todo-item__check",
+    checked: item.done,
+    "aria-label": t("todo.completeAria", { name: item.text }),
+  });
+  check.addEventListener("change", () => {
+    item.done = check.checked;
+    commit();
+  });
+  const text = h("span", { class: "todo-item__text" }, item.text);
+  const label = h("label", { class: "todo-item__label" }, check, text);
+  // 編集モードでは、文字をクリックすると書き直せる
+  label.addEventListener("click", async (event) => {
+    if (!editing || event.target === check) return;
+    event.preventDefault();
+    const value = await askText({ title: t("todo.editTitle"), label: t("todo.editLabel"), value: item.text });
+    if (value) {
+      item.text = value;
+      commit();
+    }
+  });
+  return h("li", { class: `todo-item${item.done ? " todo-item--done" : ""}`, dataset: { id: item.id } },
+    label,
+    h("button", {
+      type: "button",
+      class: "button button--small button--ghost todo-item__delete",
+      "aria-label": t("todo.deleteAria", { name: item.text }),
+      title: t("common.delete"),
+      onclick: () => {
+        widget.items = widget.items.filter((i) => i.id !== item.id);
+        commit();
+      },
+    }, "×"),
+  );
+}
+
+async function addTodoCategory(widget) {
+  const name = await askText({ title: t("todo.addCategory"), label: t("todo.categoryName"), value: "" });
+  if (!name) return;
+  widget.categories.push({ id: uid(), name });
+  commit();
+}
+
+async function renameTodoCategory(widget, cat) {
+  const name = await askText({ title: t("todo.renameCategoryTitle"), label: t("todo.categoryName"), value: cat.name });
+  if (!name) return;
+  cat.name = name;
+  commit();
+}
+
+function deleteTodoCategory(widget, cat) {
+  const count = widget.items.filter((i) => i.categoryId === cat.id).length;
+  const extra = count ? t("todo.deleteCategoryTodos", { n: count }) : "";
+  if (!confirm(t("todo.deleteCategoryConfirm", { name: cat.name }) + extra)) return;
+  widget.categories = widget.categories.filter((c) => c.id !== cat.id);
+  widget.items = widget.items.filter((i) => i.categoryId !== cat.id);
+  commit();
+}
+
+/* ================================================================== */
+/* 1 行の文字を入力してもらうダイアログ                                   */
+/* ================================================================== */
+
+/**
+ * @returns {Promise<string|null>} 入力された文字。キャンセルなら null。
+ *   allowEmpty が true なら空欄で保存でき、そのときは ""。
+ */
+function askText({ title, label, value, allowEmpty = false }) {
+  const input = el.textForm.elements.text;
+  $("#text-dialog-title").textContent = title;
+  $("#text-dialog-label").textContent = label;
+  input.value = value || "";
+  input.required = !allowEmpty;
+  el.textDialog.returnValue = "";
+  el.textDialog.showModal();
+  input.select();
+  return new Promise((resolve) => {
+    el.textDialog.addEventListener("close", () => {
+      if (el.textDialog.returnValue !== "ok") return resolve(null);
+      const text = input.value.trim();
+      resolve(text || (allowEmpty ? "" : null));
+    }, { once: true });
+  });
+}
+
+/* ================================================================== */
+/* アドレスバーなどからのリンクのドロップ                                 */
+/* ================================================================== */
+
+let internalDrag = false; // このページの中で始まったドラッグは対象外
+let toastTimer = null;
+
+function showToast(message, action) {
+  clearTimeout(toastTimer);
+  el.toast.replaceChildren(h("span", {}, message));
+  if (action) {
+    el.toast.append(h("button", {
+      type: "button",
+      class: "button button--small",
+      onclick: () => { el.toast.hidden = true; action.run(); },
+    }, action.label));
+  }
+  el.toast.hidden = false;
+  toastTimer = setTimeout(() => { el.toast.hidden = true; }, 4000);
+}
+
+function hasLinkData(dataTransfer) {
+  const types = [...(dataTransfer?.types || [])];
+  if (types.includes("Files")) return false;
+  return types.includes("text/uri-list") || types.includes("text/x-moz-url") || types.includes("text/plain");
+}
+
+/** ドロップされたデータから URL とページ名を取り出す */
+function readDroppedLink(dataTransfer) {
+  let url = null;
+  let title = "";
+  // Firefox：「URL 改行 ページ名」
+  const moz = dataTransfer.getData("text/x-moz-url");
+  if (moz) {
+    const [u, t] = moz.split(/\r?\n/);
+    url = safeUrl(u);
+    title = (t || "").trim();
+  }
+  if (!url) {
+    const uri = dataTransfer.getData("text/uri-list")
+      .split(/\r?\n/).map((line) => line.trim()).find((line) => line && !line.startsWith("#"));
+    url = safeUrl(uri || "");
+  }
+  // ページ名は HTML（<a href="...">ページ名</a>）に入っていることがある
+  const html = dataTransfer.getData("text/html");
+  if (html) {
+    const a = new DOMParser().parseFromString(html, "text/html").querySelector("a[href]");
+    if (a) {
+      url = url || safeUrl(a.getAttribute("href"));
+      if (!title) title = a.textContent.trim();
+    }
+  }
+  if (!url) url = safeUrl(dataTransfer.getData("text/plain"));
+  if (!url) return null;
+  if (title === url || safeUrl(title)) title = "";
+  return { url, title: title.slice(0, 80) };
+}
+
+function setDropTarget(widgetEl) {
+  for (const node of $$(".widget.is-drop-target", el.dashboard)) {
+    if (node !== widgetEl) node.classList.remove("is-drop-target");
+  }
+  widgetEl?.classList.add("is-drop-target");
+}
+
+document.addEventListener("dragstart", () => { internalDrag = true; });
+document.addEventListener("dragend", () => { internalDrag = false; setDropTarget(null); });
+
+document.addEventListener("dragover", (event) => {
+  if (internalDrag || !state || !hasLinkData(event.dataTransfer)) return;
+  if (event.target.closest?.("input, textarea, dialog")) return; // 入力欄への文字のドロップはそのまま
+  // ページ外へ移動してしまわないよう、どこでも既定の動作は止める
+  event.preventDefault();
+  const target = event.target.closest?.(".widget--links, .widget--embed, .widget--photo") || null;
+  event.dataTransfer.dropEffect = target ? "copy" : "none";
+  setDropTarget(target);
+});
+
+document.addEventListener("dragleave", (event) => {
+  if (!event.relatedTarget) setDropTarget(null); // ウィンドウの外に出た
+});
+
+document.addEventListener("drop", (event) => {
+  if (internalDrag || !state || !hasLinkData(event.dataTransfer)) return;
+  if (event.target.closest?.("input, textarea, dialog")) return;
+  event.preventDefault();
+  setDropTarget(null);
+  const target = event.target.closest?.(".widget--links, .widget--embed, .widget--photo");
+  const widget = target && widgets().find((w) => w.id === target.dataset.id);
+  if (!widget) return;
+
+  // 写真ウィジェット：ドロップされた画像を追加する
+  if (widget.type === "photo") {
+    const src = readDroppedImage(event.dataTransfer);
+    if (!src) {
+      showToast(t("photo.dropUnreadable"));
+      return;
+    }
+    if (addPhoto(widget, src)) showToast(t("photo.added", { name: widget.title || t("widget.photo") }));
+    return;
+  }
+
+  const link = readDroppedLink(event.dataTransfer);
+  if (!link) {
+    showToast(t("link.unreadable"));
+    return;
+  }
+  // 埋め込みウィジェット：表示する URL を差し替える
+  if (widget.type === "embed") {
+    const previous = widget.embedUrl;
+    widget.embedUrl = link.url;
+    commit();
+    showToast(toYouTubeEmbed(link.url) ? t("embed.embeddedYouTube") : t("embed.changed"),
+      previous ? { label: t("common.undo"), run: () => { widget.embedUrl = previous; commit(); } } : null);
+    return;
+  }
+  const name = widget.title || t("widget.links");
+  if (widget.items.some((i) => safeUrl(i.url) === link.url)) {
+    showToast(t("link.duplicate", { name }));
+    return;
+  }
+  // ページ名がわからない（Chrome・Safari のアドレスバーから）ときは、名前を入力できるよう追加画面を開く。
+  // URL は入力済み。空のまま保存すればドメイン名で、キャンセルなら追加しない
+  if (!link.title) {
+    openLinkDialog(widget.id, null, { url: link.url });
+    return;
+  }
+  const item = { id: uid(), url: link.url, title: link.title, icon: "", description: "" };
+  widget.items.push(item);
+  commit();
+  showToast(t("link.added", { link: link.title || hostname(link.url), name }), {
+    label: t("link.editName"),
+    run: () => openLinkDialog(widget.id, item.id),
+  });
+});
+
+/* ================================================================== */
+/* ドラッグ＆ドロップ（編集モードのみ）                                   */
+/* ================================================================== */
+
+function destroySortables() {
+  for (const s of sortables) s.destroy();
+  sortables = [];
+}
+
+/** リンクをドラッグで動かした直後か（指を離したときのクリックで、リンクを開かないため） */
+let linkDragging = false;
+let suppressLinkClickUntil = 0;
+
+function setupSortables() {
+  if (typeof Sortable === "undefined") return;
+
+  const common = {
+    animation: 150,
+    ghostClass: "is-ghost",
+    chosenClass: "is-chosen",
+    dragClass: "is-dragging",
+    forceFallback: true, // マウスでもタッチでも同じ動きにする
+    fallbackOnBody: true,
+    delayOnTouchOnly: true,
+    delay: 150, // スマホではスクロールと区別するため少し長押し
+  };
+
+  // リンクの並べ替え（ウィジェット間の移動も可）
+  for (const list of $$(".link-list", el.dashboard)) {
+    sortables.push(new Sortable(list, {
+      ...common,
+      group: "links",
+      draggable: ".link-item",
+      filter: ".link-item__edit",
+      preventOnFilter: false,
+      // 編集モードの外：クリックでリンクを開けるよう、少し動かしてから移動を始める。
+      // スマホは長押し（0.3 秒）してから指を動かすと移動（そのまま離さずにいると編集画面）
+      ...(editing ? {} : { fallbackTolerance: 6, delay: 300 }),
+      emptyInsertThreshold: 24, // 空のリンク集にも入れやすく
+      onStart: (event) => {
+        linkDragging = true;
+        el.root.classList.add("is-link-dragging"); // 移せるリンク集すべてに印を付ける
+        setDropTarget(event.from.closest(".widget"));
+      },
+      // 今入る先のリンク集を目立たせる
+      onMove: (event) => { setDropTarget(event.to.closest(".widget")); },
+      onEnd: (event) => {
+        linkDragging = false;
+        el.root.classList.remove("is-link-dragging");
+        setDropTarget(null);
+        suppressLinkClickUntil = Date.now() + 400;
+        if (event.from === event.to && event.oldIndex === event.newIndex) return;
+        const all = new Map();
+        for (const w of widgets()) {
+          if (w.type === "links") for (const item of w.items) all.set(item.id, item);
+        }
+        for (const listEl of new Set([event.from, event.to])) {
+          const widget = widgets().find((w) => w.id === listEl.dataset.widgetId);
+          if (!widget) continue;
+          widget.items = $$(".link-item", listEl).map((n) => all.get(n.dataset.id)).filter(Boolean);
+        }
+        commit();
+      },
+    }));
+  }
+
+  // ここから下は編集モードのときだけ
+  if (!editing) return;
+
+  // タブの並べ替え
+  const tabList = $(".tabs__list", el.tabs);
+  if (tabList) {
+    sortables.push(new Sortable(tabList, {
+      ...common,
+      direction: "horizontal",
+      draggable: ".tab-item:not(.tab-item--org)",
+      handle: ".tab-item__handle",
+      onEnd: () => {
+        // 並べ替えるのは自分のタブだけ。組織のタブはいつも左に並べる
+        const order = $$(".tab-item", tabList).map((n) => n.dataset.pageId);
+        const mine = personalPages().sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+        state.pages = [...state.pages.filter((p) => p.unit), ...mine];
+        commit();
+      },
+    }));
+  }
+
+  // ウィジェットの並べ替え
+  sortables.push(new Sortable(el.dashboard, {
+    ...common,
+    handle: ".widget__handle",
+    draggable: ".widget",
+    onEnd: () => {
+      const order = $$(".widget", el.dashboard).map((n) => n.dataset.id);
+      widgets().sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+      commit();
+    },
+  }));
+
+  // 写真の並べ替え
+  for (const thumbs of $$(".photo-thumbs", el.dashboard)) {
+    const widget = widgets().find((w) => w.id === thumbs.dataset.widgetId);
+    if (!widget) continue;
+    sortables.push(new Sortable(thumbs, {
+      ...common,
+      draggable: ".photo-thumb",
+      filter: "button",
+      preventOnFilter: false,
+      onEnd: () => {
+        const order = $$(".photo-thumb", thumbs).map((n) => n.dataset.id);
+        widget.photos.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+        commit();
+      },
+    }));
+  }
+
+  // ToDo：カテゴリーの並べ替え
+  for (const groups of $$(".todo__groups", el.dashboard)) {
+    const widget = widgets().find((w) => w.id === groups.dataset.widgetId);
+    if (!widget) continue;
+    sortables.push(new Sortable(groups, {
+      ...common,
+      handle: ".todo-group__handle",
+      draggable: ".todo-group",
+      onEnd: () => {
+        const order = $$(".todo-group", groups).map((n) => n.dataset.categoryId);
+        widget.categories.sort((a, b) => order.indexOf(a.id) - order.indexOf(b.id));
+        commit();
+      },
+    }));
+    // ToDo の並べ替え（同じウィジェットのカテゴリー間で移動も可）
+    for (const list of $$(".todo-list", groups)) {
+      sortables.push(new Sortable(list, {
+        ...common,
+        group: `todo-${widget.id}`,
+        draggable: ".todo-item",
+        filter: "input, button",
+        preventOnFilter: false,
+        onEnd: () => {
+          const byId = new Map(widget.items.map((i) => [i.id, i]));
+          widget.items = $$(".todo-list", groups).flatMap((listEl) =>
+            $$(".todo-item", listEl).map((n) => {
+              const item = byId.get(n.dataset.id);
+              if (item) item.categoryId = listEl.dataset.categoryId;
+              return item;
+            }).filter(Boolean));
+          commit();
+        },
+      }));
+    }
+  }
+}
+
+function setEditing(value) {
+  editMode = value;
+  el.editToggle.setAttribute("aria-pressed", String(editMode));
+  $(".button__label", el.editToggle).textContent = editMode ? t("common.done") : t("common.edit");
+  render();
+}
+
+/** 今のタブで編集できるかを決め直す（タブを切り替えたとき・描き直すとき） */
+function updateEditing() {
+  editing = editMode && Boolean(state) && canEditPage(page());
+  if (editing) el.root.dataset.editing = "";
+  else delete el.root.dataset.editing;
+  // タブの操作（並べ替え・複製など）は、閲覧のみのタブを開いていても出す
+  if (editMode) el.root.dataset.editMode = "";
+  else delete el.root.dataset.editMode;
+}
+
+/* ================================================================== */
+/* 絞り込み                                                              */
+/* ================================================================== */
+
+function applyFilter() {
+  const q = el.filter.value.trim().toLowerCase();
+  for (const item of $$(".link-item", el.dashboard)) {
+    item.classList.toggle("is-filtered-out", Boolean(q) && !item.dataset.search.includes(q));
+  }
+  for (const widget of $$(".widget--links", el.dashboard)) {
+    const visible = $$(".link-item:not(.is-filtered-out)", widget).length;
+    widget.classList.toggle("is-filtered-out", Boolean(q) && visible === 0);
+  }
+  for (const widget of $$(".widget:not(.widget--links)", el.dashboard)) {
+    widget.classList.toggle("is-filtered-out", Boolean(q));
+  }
+}
+
+el.filter.addEventListener("input", applyFilter);
+el.filter.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    const first = $(".link-item:not(.is-filtered-out) .link", el.dashboard);
+    if (first) first.click();
+  } else if (event.key === "Escape") {
+    el.filter.value = "";
+    applyFilter();
+    el.filter.blur();
+  }
+});
+
+document.addEventListener("keydown", (event) => {
+  const tag = document.activeElement?.tagName;
+  const typing = tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+  if (event.key === "/" && !typing && !document.querySelector("dialog[open]")) {
+    event.preventDefault();
+    el.filter.focus();
+  }
+  if ((event.key === "d" || event.key === "D") && !typing && !event.ctrlKey && !event.metaKey && !event.altKey
+    && !event.isComposing && !document.querySelector("dialog[open]")) {
+    event.preventDefault();
+    toggleMode();
+  }
+});
+
+/* ================================================================== */
+/* ウィジェットの編集                                                    */
+/* ================================================================== */
+
+let editingWidgetId = null;
+
+function updateWidgetFormVisibility() {
+  const type = el.widgetForm.elements.type.value;
+  for (const field of $$("[data-for-type]", el.widgetForm)) {
+    field.hidden = field.dataset.forType !== type;
+  }
+  // YouTube の URL なら高さは自動なので、入力欄を隠して説明を出す
+  const isYouTube = type === "embed" && Boolean(toYouTubeEmbed(el.widgetForm.elements.embedUrl.value));
+  $("#embed-url-hint").hidden = !isYouTube;
+  if (isYouTube) $("#embed-height-field").hidden = true;
+}
+el.widgetForm.elements.type.addEventListener("change", updateWidgetFormVisibility);
+el.widgetForm.elements.embedUrl.addEventListener("input", updateWidgetFormVisibility);
+
+function openWidgetDialog(widgetId) {
+  editingWidgetId = widgetId;
+  const widget = widgets().find((w) => w.id === widgetId);
+  const f = el.widgetForm.elements;
+
+  $("#widget-dialog-title").textContent = widget ? t("widget.editTitle") : t("dialog.widgetAdd");
+  // アドオンを外したなどで、知らない種類のウィジェットも編集（大きさ・削除など）できるように
+  if (widget && ![...f.type.options].some((o) => o.value === widget.type)) {
+    f.type.append(h("option", { value: widget.type }, t("dialog.missingAddon", { type: widget.type })));
+  }
+  f.type.value = widget?.type || "links";
+  f.type.disabled = Boolean(widget); // 種類は作成時のみ選べる
+  f.title.value = widget?.title ?? "";
+  f.size.value = widget?.size || "m";
+  f.rows.value = String(widget?.rows || DEFAULT_ROWS[f.type.value] || 2);
+  const movable = state.pages.filter(canEditPage);
+  f.page.replaceChildren(...movable.map((p) => h("option", { value: p.id }, p.unit ? `${p.name}（${storage.unitById(p.unit)?.name || ""}）` : p.name)));
+  f.page.value = page().id;
+  $("#widget-page-field").hidden = movable.length <= 1;
+  f.useAccent.checked = isHexColor(widget?.accent);
+  f.accent.value = isHexColor(widget?.accent) ? widget.accent : "#2f6f5e";
+  f.view.value = widget?.view || "list";
+  f.searchUrl.value = widget?.searchUrl || "";
+  f.embedUrl.value = widget?.embedUrl || "";
+  f.height.value = widget?.height || 400;
+  fillZoneSelect(f.timeZone, widget?.timeZone || "", h("option", { value: "" }, t("dialog.timeZoneBrowser")));
+  f.photoFit.value = widget?.fit || "cover";
+  f.noteMarkdown.checked = widget?.markdown !== false;
+  f.calendarDays.value = String(widget?.days || 3);
+  f.allCalendars.checked = widget?.allCalendars !== false;
+  f.mailLabel.value = widget?.label || "INBOX";
+  f.photoInterval.value = String(widget?.interval ?? 10);
+  // 追加したウィジェットの種類ごとの設定欄（WIDGET_FORMS）
+  for (const [type, form] of Object.entries(WIDGET_FORMS)) form.fill(f, widget?.type === type ? widget : null);
+  el.widgetDelete.hidden = !widget;
+  updateWidgetFormVisibility();
+  updateSizeOptions();
+  el.widgetDialog.returnValue = "";
+  el.widgetDialog.showModal();
+}
+
+/** 種類に合わせて、最小サイズより小さい幅・高さを選べないようにする */
+function updateSizeOptions() {
+  const f = el.widgetForm.elements;
+  const min = minSizeOf(f.type.value);
+  for (const option of f.size.options) option.disabled = SIZES.indexOf(option.value) < SIZES.indexOf(min.size);
+  for (const option of f.rows.options) option.disabled = Number(option.value) < min.rows;
+  f.size.value = clampSize(f.size.value, f.type.value);
+  if (Number(f.rows.value) < min.rows) f.rows.value = String(min.rows);
+  const fixed = FIXED_ROWS[f.type.value];
+  f.rows.disabled = Boolean(fixed);
+  if (fixed) f.rows.value = String(fixed);
+  const hint = $("#size-hint");
+  const isMin = min.size !== "s" || min.rows > 1;
+  hint.hidden = !isMin && !fixed;
+  hint.textContent = fixed ? t("dialog.rowsFixed", { n: fixed })
+    : isMin ? t("dialog.minSize", { size: SIZE_NAMES[min.size], rows: min.rows }) : "";
+}
+
+el.widgetForm.elements.accent.addEventListener("input", () => {
+  el.widgetForm.elements.useAccent.checked = true;
+});
+
+// タイマー：選んだ種類に関係する時間の欄だけ見せる
+function updateTimerFields() {
+  const mode = el.widgetForm.elements.timerMode.value;
+  for (const label of $$("[data-timer-mode]", el.widgetForm)) label.hidden = label.dataset.timerMode !== mode;
+}
+el.widgetForm.elements.timerMode.addEventListener("change", updateTimerFields);
+el.widgetForm.elements.type.addEventListener("change", updateTimerFields);
+el.widgetDialog.addEventListener("toggle", updateTimerFields);
+
+// 天気：ブラウザの位置情報で、現在地の緯度・経度を入れる
+$("#weather-here").addEventListener("click", () => {
+  const f = el.widgetForm.elements;
+  if (!navigator.geolocation) {
+    showToast(t("dialog.geoUnsupported"));
+    return;
+  }
+  const button = $("#weather-here");
+  button.disabled = true;
+  navigator.geolocation.getCurrentPosition((pos) => {
+    f.weatherLat.value = pos.coords.latitude.toFixed(4);
+    f.weatherLon.value = pos.coords.longitude.toFixed(4);
+    f.weatherPlace.value = t("weather.here");
+    button.disabled = false;
+  }, () => {
+    showToast(t("dialog.geoFailed"));
+    button.disabled = false;
+  }, { timeout: 10000, maximumAge: 600000 });
+});
+// 地名を書き換えたら、現在地の緯度・経度は使わない
+el.widgetForm.elements.weatherPlace.addEventListener("input", () => {
+  el.widgetForm.elements.weatherLat.value = "";
+  el.widgetForm.elements.weatherLon.value = "";
+});
+
+// GitHub：この端末に保存したトークンを消す
+$("#github-token-clear").addEventListener("click", () => {
+  if (!confirm(t("dialog.githubTokenClearConfirm"))) return;
+  setGitHubToken("");
+  WIDGET_FORMS.github.fill(el.widgetForm.elements, widgets().find((w) => w.id === editingWidgetId) || null);
+  refreshRemoteWidgets();
+});
+
+// 新しく追加するときは、種類を変えたら高さ（段数）もその種類の初期値にする
+el.widgetForm.elements.type.addEventListener("change", () => {
+  if (!editingWidgetId) {
+    el.widgetForm.elements.rows.value = String(DEFAULT_ROWS[el.widgetForm.elements.type.value] || 2);
+  }
+  updateSizeOptions();
+});
+
+el.widgetDialog.addEventListener("close", () => {
+  if (el.widgetDialog.returnValue !== "ok") return;
+  const f = el.widgetForm.elements;
+  let widget = widgets().find((w) => w.id === editingWidgetId);
+  if (!widget) {
+    widget = { id: uid(), type: f.type.value };
+    if (widget.type === "links") widget.items = [];
+    if (widget.type === "note") widget.text = "";
+    if (widget.type === "photo") widget.photos = [];
+    if (widget.type === "todo") {
+      widget.categories = DEFAULT_TODO_CATEGORIES.map((key) => ({ id: uid(), name: t(key) }));
+      widget.items = [];
+    }
+    WIDGET_FORMS[widget.type]?.init?.(widget);
+    widgets().push(widget);
+  }
+  widget.title = f.title.value.trim();
+  widget.size = clampSize(f.size.value, widget.type);
+  widget.rows = normalizeRows(f.rows.value, widget.type);
+  WIDGET_FORMS[widget.type]?.save(f, widget);
+  if (f.useAccent.checked && isHexColor(f.accent.value)) widget.accent = f.accent.value;
+  else delete widget.accent;
+
+  if (widget.type === "links") widget.view = f.view.value === "grid" ? "grid" : "list";
+  if (widget.type === "search") widget.searchUrl = f.searchUrl.value.trim();
+  if (widget.type === "embed") {
+    widget.embedUrl = f.embedUrl.value.trim();
+    widget.height = Number(f.height.value) || 400;
+  }
+  if (widget.type === "clock") widget.timeZone = f.timeZone.value.trim();
+  if (widget.type === "note") widget.markdown = f.noteMarkdown.checked;
+  if (widget.type === "calendar") {
+    const days = Number(f.calendarDays.value);
+    widget.days = CALENDAR_DAYS.includes(days) ? days : 3;
+    widget.allCalendars = f.allCalendars.checked;
+  }
+  if (widget.type === "mail") widget.label = MAIL_LABELS[f.mailLabel.value] ? f.mailLabel.value : "INBOX";
+  if (widget.type === "photo") {
+    widget.fit = f.photoFit.value === "contain" ? "contain" : "cover";
+    const interval = Number(f.photoInterval.value);
+    widget.interval = PHOTO_INTERVALS.includes(interval) ? interval : 10;
+  }
+
+  // 別のタブへ移す
+  const target = state.pages.find((p) => p.id === f.page.value && canEditPage(p));
+  if (target && target.id !== page().id) {
+    page().widgets = widgets().filter((w) => w.id !== widget.id);
+    target.widgets.push(widget);
+    commit();
+    showToast(t("dialog.widgetMoved", { name: widget.title || typeName(widget.type), tab: target.name }), {
+      label: t("dialog.openThatTab"),
+      run: () => switchPage(target.id),
+    });
+    return;
+  }
+  commit();
+});
+
+el.widgetDelete.addEventListener("click", () => {
+  const widget = widgets().find((w) => w.id === editingWidgetId);
+  if (!widget) return;
+  const extra = widget.type === "links" && widget.items.length ? t("dialog.widgetDeleteLinks", { n: widget.items.length })
+    : widget.type === "todo" && widget.items.length ? t("dialog.widgetDeleteTodos", { n: widget.items.length })
+    : widget.type === "photo" && widget.photos.length ? t("dialog.widgetDeletePhotos", { n: widget.photos.length }) : "";
+  if (!confirm(t("dialog.widgetDeleteConfirm", { name: widget.title || typeName(widget.type) }) + extra)) return;
+  page().widgets = widgets().filter((w) => w.id !== editingWidgetId);
+  el.widgetDialog.close("deleted");
+  commit();
+});
+
+/* ================================================================== */
+/* リンクの編集                                                          */
+/* ================================================================== */
+
+let linkTarget = { widgetId: null, itemId: null };
+
+function openLinkDialog(widgetId, itemId, { url = "" } = {}) {
+  linkTarget = { widgetId, itemId };
+  const widget = widgets().find((w) => w.id === widgetId);
+  const item = widget?.items.find((i) => i.id === itemId);
+  const f = el.linkForm.elements;
+
+  $("#link-dialog-title").textContent = item ? t("link.editTitle") : t("link.add");
+  f.url.value = item?.url || url;
+  f.title.value = item?.title || "";
+  f.icon.value = item?.icon || "";
+  f.description.value = item?.description || "";
+  el.linkDelete.hidden = !item;
+  el.linkDialog.returnValue = "";
+  el.linkDialog.showModal();
+  // URL が入っているとき（ドロップで追加）は、表示名の欄から入力できるようにする
+  if (!item && url) f.title.focus();
+}
+
+el.linkForm.addEventListener("submit", (event) => {
+  if (event.submitter?.value === "ok" && !safeUrl(el.linkForm.elements.url.value)) {
+    event.preventDefault();
+    el.linkForm.elements.url.setCustomValidity(t("link.invalidUrl"));
+    el.linkForm.elements.url.reportValidity();
+  }
+});
+el.linkForm.elements.url.addEventListener("input", () => el.linkForm.elements.url.setCustomValidity(""));
+
+el.linkDialog.addEventListener("close", () => {
+  if (el.linkDialog.returnValue !== "ok") return;
+  const widget = widgets().find((w) => w.id === linkTarget.widgetId);
+  if (!widget) return;
+  const f = el.linkForm.elements;
+  const url = safeUrl(f.url.value);
+  if (!url) return;
+
+  let item = widget.items.find((i) => i.id === linkTarget.itemId);
+  if (!item) {
+    item = { id: uid() };
+    widget.items.push(item);
+  }
+  item.url = url;
+  item.title = f.title.value.trim();
+  item.icon = f.icon.value.trim();
+  item.description = f.description.value.trim();
+  commit();
+});
+
+el.linkDelete.addEventListener("click", () => {
+  const widget = widgets().find((w) => w.id === linkTarget.widgetId);
+  if (!widget) return;
+  widget.items = widget.items.filter((i) => i.id !== linkTarget.itemId);
+  el.linkDialog.close("deleted");
+  commit();
+});
+
+/* ================================================================== */
+/* 設定                                                                 */
+/* ================================================================== */
+
+/** テーマの見本。data-preset を持たせると、中はそのテーマの CSS 変数で描かれる */
+function renderThemePicker() {
+const selected = el.settingsForm.elements.preset?.value;
+el.themePicker.replaceChildren(
+  ...THEME_PRESETS.map((p) =>
+    h("label", { class: "theme-option" },
+      h("input", { type: "radio", name: "preset", value: p.id, class: "theme-option__input" }),
+      h("span", { class: "theme-preview", dataset: { preset: p.id || "default" }, "aria-hidden": "true" },
+        h("span", { class: "theme-preview__title" }, "Dashboard"),
+        h("span", { class: "theme-preview__cards" },
+          h("span", { class: "theme-preview__card" },
+            h("span", { class: "theme-preview__heading" }, "Links"),
+            h("span", { class: "theme-preview__line" }),
+            h("span", { class: "theme-preview__line theme-preview__line--short" }),
+            h("span", { class: "theme-preview__chip" }),
+          ),
+          h("span", { class: "theme-preview__card" },
+            h("span", { class: "theme-preview__heading" }, "Clock"),
+            h("span", { class: "theme-preview__clock" }, "9:41"),
+          ),
+        ),
+      ),
+      h("span", { class: "theme-option__label" },
+        t(p.label),
+        p.note ? h("span", { class: "theme-option__note" }, t("common.withParen", { text: "", note: t(p.note) }).trim()) : null,
+      ),
+    ),
+  ),
+);
+if (selected != null) el.settingsForm.elements.preset.value = selected;
+}
+
+/** 設定画面の「言語」の選択肢（「自動」はそのまま、言語名はその言語で書く） */
+el.settingsForm.elements.language.append(...LANGUAGES.map((l) => h("option", { value: l.id }, l.label)));
+
+el.settingsOpen.addEventListener("click", () => {
+  const f = el.settingsForm.elements;
+  f.title.value = state.title;
+  f.language.value = state.settings.language;
+  for (const hint of $$("[data-personal-hint]", el.settingsForm)) hint.hidden = !isPersonalMode();
+  f.mode.value = state.settings.mode;
+  f.preset.value = state.settings.preset;
+  f.density.value = state.settings.density;
+  f.layout.value = state.settings.layout;
+  f.openInNewTab.checked = state.settings.openInNewTab;
+  f.useFavicons.checked = state.settings.useFavicons;
+  f.autoRenewGoogle.checked = state.settings.autoRenewGoogle;
+  el.settingsDialog.returnValue = "";
+  el.settingsDialog.showModal();
+});
+
+// 配色・テーマ・表示密度・レイアウトは選んだ時点で画面に反映して見せる（保存はまだ）
+el.settingsForm.addEventListener("change", (event) => {
+  if (!["language", "mode", "preset", "density", "layout"].includes(event.target.name)) return;
+  const f = el.settingsForm.elements;
+  applySettings({
+    ...state.settings,
+    language: f.language.value,
+    mode: f.mode.value,
+    preset: f.preset.value,
+    density: f.density.value,
+    layout: f.layout.value,
+  });
+});
+
+el.settingsDialog.addEventListener("close", () => {
+  if (el.settingsDialog.returnValue === "ok") {
+    const f = el.settingsForm.elements;
+    state.title = f.title.value.trim() || "Dashboard";
+    state.settings = {
+      language: LANGUAGES.some((l) => l.id === f.language.value) ? f.language.value : "auto",
+      mode: f.mode.value,
+      preset: f.preset.value,
+      density: f.density.value === "compact" ? "compact" : "normal",
+      layout: f.layout.value === "flow" ? "flow" : "tile",
+      openInNewTab: f.openInNewTab.checked,
+      useFavicons: f.useFavicons.checked,
+      autoRenewGoogle: f.autoRenewGoogle.checked,
+    };
+    if (isPersonalMode()) storage.writePersonal(state.settings);
+    commit();
+  } else {
+    applySettings(); // プレビューを元に戻す
+  }
+});
+
+el.exportButton.addEventListener("click", () => {
+  // 書き出すのは自分のタブだけ（組織のタブは、組織のスプレッドシートにある）
+  const blob = new Blob([JSON.stringify({ ...state, pages: personalPages() }, null, 2)], { type: "application/json" });
+  const a = h("a", {
+    href: URL.createObjectURL(blob),
+    download: `dashboard-${new Date().toISOString().slice(0, 10)}.json`,
+  });
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+el.importInput.addEventListener("change", async () => {
+  const file = el.importInput.files?.[0];
+  el.importInput.value = "";
+  if (!file) return;
+  try {
+    const data = JSON.parse(await file.text());
+    if (!Array.isArray(data.pages) && !Array.isArray(data.widgets)) throw new Error(t("settings.importNoWidgets"));
+    if (!confirm(t("settings.importConfirm"))) return;
+    // 読み込むのは自分のタブだけ。組織のタブはそのまま残す
+    const imported = normalize(data).pages.map((p) => { const { unit, ...rest } = p; return rest; });
+    state = withPersonal(normalize({ ...data, pages: [...state.pages.filter((p) => p.unit), ...imported] }));
+    pickInitialPage();
+    el.settingsDialog.close("imported");
+    commit();
+  } catch (err) {
+    alert(t("settings.importFailed", { message: err.message }));
+  }
+});
+
+el.resetButton.addEventListener("click", async () => {
+  if (!confirm(t("settings.resetConfirm"))) return;
+  try {
+    const initial = await storage.loadDefault();
+    state = withPersonal(normalize({ ...initial, pages: [...state.pages.filter((p) => p.unit), ...initial.pages] }));
+    pickInitialPage();
+    el.settingsDialog.close("reset");
+    commit();
+  } catch (err) {
+    alert(err.message);
+  }
+});
+
+/* ================================================================== */
+/* 起動                                                                 */
+/* ================================================================== */
+
+el.editToggle.addEventListener("click", () => setEditing(!editMode));
+
+/*
+ * 編集用のダイアログでは、入力欄で Enter を押したら「保存」にする。
+ * （そのままだと、ボタンの並びで先にある「キャンセル」が押された扱いになってしまう）
+ * 日本語入力の変換を確定する Enter、複数行の入力欄、ボタンやプルダウンの上の Enter はそのまま。
+ */
+for (const form of [el.widgetForm, el.linkForm, el.textForm, el.settingsForm]) {
+  form.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter" || event.isComposing || event.keyCode === 229) return;
+    if (event.shiftKey || event.altKey || event.ctrlKey || event.metaKey) return;
+    const target = event.target;
+    if (!(target instanceof HTMLInputElement)) return; // textarea・select・button は対象外
+    if (["checkbox", "radio", "button", "submit", "reset", "file", "color"].includes(target.type)) return;
+    event.preventDefault();
+    const save = form.querySelector('button[value="ok"]');
+    if (save) form.requestSubmit(save); // 入力内容のチェック（URL の形式など）も通常どおり行う
+  });
+}
+
+/** ログイン前・読み込み失敗時：ダッシュボードを隠して、編集できないようにする */
+function showSignedOut() {
+  storage.stopWatching();
+  clearTimeout(remoteRetry);
+  el.sharedBadge.hidden = true;
+  clearInterval(clockTimer);
+  if (editMode) setEditing(false);
+  state = null;
+  el.dashboard.replaceChildren();
+  el.tabs.replaceChildren();
+  el.tabs.hidden = true;
+  el.headerSearch.hidden = true;
+  el.headerActions.hidden = true;
+  el.userEmail.textContent = "";
+  el.signoutButton.hidden = true;
+  el.title.textContent = "Dashboard";
+  document.title = "Dashboard";
+}
+
+/** データを読み込んでダッシュボードを表示する */
+async function openDashboard(user) {
+  currentEmail = user?.email || "";
+  googleCache.clear();
+  setStatus(t("common.loading"));
+  try {
+    const result = await storage.load();
+    storageMode = result.mode;
+    state = withPersonal(normalize(result.data));
+    storage.setBase(JSON.stringify(forSaving(state))); // 補正した内容を「もと」にする（開いただけで保存しない）
+    pickInitialPage();
+  } catch (err) {
+    // 許可がない・設定漏れなど。データを上書きしないよう、画面は出さない
+    showSignedOut();
+    if (user) {
+      el.userEmail.textContent = user.email;
+      el.signoutButton.hidden = false;
+    }
+    showBanner(err.message);
+    return;
+  }
+
+  el.signin.hidden = true;
+  el.headerSearch.hidden = false;
+  el.headerActions.hidden = false;
+  el.editToggle.disabled = false;
+  el.settingsOpen.disabled = false;
+  if (user) el.userEmail.textContent = user.email; // Apps Script ではログアウトはない（Google アカウント側で行う）
+  if (storageMode === "local") {
+    showBanner(
+      t("banner.localMode"),
+      "info",
+    );
+  } else {
+    showBanner("");
+  }
+  if (addonLoadError) showBanner(addonLoadError);
+  setStatus("");
+  render();
+  clearInterval(clockTimer);
+  clockTimer = setInterval(updateClocks, 1000);
+  // ほかの人・ほかの端末の変更を受け取る
+  el.sharedBadge.hidden = !(storageMode === "remote" && storage.isShared);
+  if (storageMode === "remote") storage.watch(applyRemote);
+  renderNoticeBar();
+}
+
+el.signinButton.addEventListener("click", async () => {
+  el.signinButton.disabled = true;
+  showBanner("");
+  try {
+    await storage.signIn();
+  } catch (err) {
+    showBanner(err.message);
+  } finally {
+    el.signinButton.disabled = false;
+  }
+});
+
+el.signoutButton.addEventListener("click", async () => {
+  if (saveTimer) await saveNow();
+  await storage.signOut();
+});
+
+async function init() {
+  // アドオンの読み込みは、Firebase の準備やログインの確認と同時に進め、
+  // ダッシュボードを開く直前にだけ待つ（起動を遅くしないため）
+  const addonsReady = loadAddons();
+
+  // ログイン前も、前回選んだテーマ・言語で表示する
+  const appearance = storage.readAppearance();
+  setLanguage(appearance?.language);
+  onLanguageChanged();
+  applySettings({ ...DEFAULT_SETTINGS, ...(appearance || {}) });
+
+  if (!storage.isConfigured) {
+    await addonsReady;
+    await openDashboard(null);
+    return;
+  }
+
+  setStatus("");
+  try {
+    await storage.initFirebase();
+  } catch (err) {
+    showBanner(err.message);
+    return;
+  }
+  storage.watchUser(async (user) => {
+    if (user) {
+      el.signin.hidden = true;
+      await addonsReady;
+      openDashboard(user);
+    } else {
+      showSignedOut();
+      el.signin.hidden = false;
+    }
+  });
+}
+
+init();
+
+/* ================================================================== */
+/* アドオン（自作ウィジェット）                                           */
+/* ================================================================== */
+/*
+ * public/addons/index.js で読み込んだアドオンが addon-api.js の registerWidget() で登録した種類を、
+ * 組み込みのウィジェットと同じように使えるようにする。書き方は WIDGET.md を参照。
+ */
+
+let addonLoadError = "";
+
+/** 種類の表示名（知らない種類なら type をそのまま） */
+const ADDON_TYPE = "addon"; // WIDGET_TYPES での、アドオンの種類の印
+
+function typeName(type) {
+  if (WIDGET_TYPES[type] === ADDON_TYPE) return localized(addons.get(type)?.name) || type;
+  return WIDGET_TYPES[type] ? t(WIDGET_TYPES[type]) : type;
+}
+
+async function loadAddons() {
+  try {
+  } catch (err) {
+    console.error(err);
+    addonLoadError = t("addon.loadFailed", { message: err?.message || err });
+  }
+  for (const def of addons.values()) {
+    try {
+      installAddon(def);
+    } catch (err) {
+      console.error(err);
+      addons.delete(def.type);
+      addonLoadError = t("addon.installFailed", { type: def.type, message: err?.message || err });
+    }
+  }
+  renderAddonForm();
+}
+
+/** 編集画面に、アドオンの「種類」の選択肢と設定欄を（今の言語で）入れる */
+function renderAddonForm() {
+  const select = el.widgetForm.elements.type;
+  for (const option of [...select.options]) if (option.dataset.addon) option.remove();
+  const installed = [...addons.values()].filter((def) => WIDGET_TYPES[def.type] === ADDON_TYPE);
+  select.append(...installed.map((def) => h("option", { value: def.type, dataset: { addon: "1" } }, localized(def.name))));
+  $("#addon-fields").replaceChildren(...installed.flatMap((def) => def.fields.map((field) => renderAddonField(def.type, field))));
+  updateWidgetFormVisibility();
+}
+
+function installAddon(def) {
+  const { type } = def;
+  if (WIDGET_TYPES[type]) throw new Error(t("addon.sameAsBuiltin", { type }));
+  WIDGET_TYPES[type] = ADDON_TYPE;
+  if (ROW_OPTIONS.includes(def.defaultRows)) DEFAULT_ROWS[type] = def.defaultRows;
+  if (def.minSize) {
+    MIN_SIZE[type] = {
+      ...(SIZES.includes(def.minSize.size) ? { size: def.minSize.size } : {}),
+      ...(ROW_OPTIONS.includes(def.minSize.rows) ? { rows: def.minSize.rows } : {}),
+    };
+  }
+  if (ROW_OPTIONS.includes(def.fixedRows)) FIXED_ROWS[type] = def.fixedRows;
+
+  // 編集画面の「種類」の選択肢と設定欄は renderAddonForm() で作る（言語を変えたときも作り直す）
+
+  // 設定欄の値の読み書き（組み込みのウィジェットと同じ WIDGET_FORMS の形）
+  const control = (f, field) => f.namedItem(addonFieldName(type, field.name));
+  WIDGET_FORMS[type] = {
+    init: (w) => {
+      for (const field of def.fields) w[field.name] = addonFieldValue(field, field.default);
+      def.init?.(w);
+    },
+    normalize: (w) => {
+      for (const field of def.fields) w[field.name] = addonFieldValue(field, w[field.name]);
+      def.normalize?.(w);
+    },
+    fill: (f, w) => {
+      for (const field of def.fields) {
+        const input = control(f, field);
+        const value = w ? w[field.name] : addonFieldValue(field, field.default);
+        if (field.type === "checkbox") input.checked = Boolean(value);
+        else input.value = value ?? "";
+      }
+    },
+    save: (f, w) => {
+      for (const field of def.fields) {
+        const input = control(f, field);
+        w[field.name] = addonFieldValue(field, field.type === "checkbox" ? input.checked : input.value);
+      }
+      def.normalize?.(w);
+    },
+  };
+
+  if (typeof def.css === "string" && def.css.trim()) {
+    // テーマ（themes レイヤー）や custom.css で上書きできるよう、components レイヤーに入れる
+    document.head.append(h("style", { dataset: { addon: type } }, `@layer components {\n${def.css}\n}`));
+  }
+}
+
+function addonFieldName(type, name) {
+  return `addon-${type}-${name}`;
+}
+
+/** 設定欄の値を、欄の種類に合わせてそろえる */
+function addonFieldValue(field, value) {
+  switch (field.type) {
+    case "checkbox":
+      return value === undefined ? Boolean(field.default) : Boolean(value);
+    case "number": {
+      if (value === "" || value == null) return typeof field.default === "number" ? field.default : null;
+      let n = Number(value);
+      if (!Number.isFinite(n)) return typeof field.default === "number" ? field.default : null;
+      if (typeof field.min === "number") n = Math.max(field.min, n);
+      if (typeof field.max === "number") n = Math.min(field.max, n);
+      return n;
+    }
+    case "select": {
+      const values = (field.options || []).map((o) => String(typeof o === "object" ? o.value : o));
+      const v = value == null ? "" : String(value);
+      if (values.includes(v)) return v;
+      return field.default != null && values.includes(String(field.default)) ? String(field.default) : values[0] ?? "";
+    }
+    default: {
+      const v = typeof value === "string" ? value : value == null ? "" : String(value);
+      return field.type === "textarea" ? v : v.trim();
+    }
+  }
+}
+
+/** 編集画面の設定欄 1 つ */
+function renderAddonField(type, field) {
+  const name = addonFieldName(type, field.name);
+  const label = localized(field.label) || field.name;
+  if (field.type === "checkbox") {
+    return h("label", { class: "checkbox", dataset: { forType: type } },
+      h("input", { type: "checkbox", name }), label);
+  }
+  let input;
+  if (field.type === "textarea") {
+    input = h("textarea", { class: "input", name, rows: field.rows || 4, placeholder: localized(field.placeholder) || null });
+  } else if (field.type === "select") {
+    input = h("select", { class: "input", name },
+      ...(field.options || []).map((o) => (typeof o === "object"
+        ? h("option", { value: String(o.value) }, localized(o.label) || String(o.value))
+        : h("option", { value: String(o) }, String(o)))));
+  } else {
+    input = h("input", {
+      class: `input${field.type === "color" ? " input--color" : ""}`,
+      type: field.type || "text",
+      name,
+      placeholder: localized(field.placeholder) || null,
+      min: field.min ?? null,
+      max: field.max ?? null,
+      step: field.step ?? null,
+    });
+  }
+  return h("label", { class: "field", dataset: { forType: type } },
+    h("span", { class: "field__label" }, label),
+    input,
+    field.hint ? h("span", { class: "field__hint" }, localized(field.hint)) : null,
+  );
+}
+
+/** アドオンのウィジェットの中身。描く関数でエラーが起きても、ほかのウィジェットは表示し続ける */
+function renderAddonWidget(widget) {
+  const def = addons.get(widget.type);
+  if (!def || WIDGET_TYPES[widget.type] !== ADDON_TYPE) {
+    return h("p", { class: "widget__empty" },
+      t("addon.missing", { type: widget.type }));
+  }
+  let root = null;
+  const api = addonApi(widget, () => root);
+  try {
+    root = def.render(widget, api) ?? null;
+    if (root != null && !(root instanceof Node)) root = document.createTextNode(String(root));
+  } catch (err) {
+    console.error(err);
+    root = h("p", { class: "widget__empty" }, t("addon.error", { type: widget.type, message: err?.message || err }));
+  }
+  return root;
+}
+
+/** アドオンの render に渡す道具 */
+function addonApi(widget, getRoot) {
+  return {
+    h, $, $$, uid, safeUrl, t, localized,
+    /** 今の言語（"ja" / "en" …）と、日付・時刻の表示に使うロケール（"ja-JP" / "en-US" …） */
+    language: language(),
+    locale: locale(),
+    /** 設定（テーマ・リンクを新しいタブで開くか など）。読み取り専用として使う */
+    settings: state.settings,
+    /** 編集モード中か */
+    editing,
+    /** widget の値を変えたあとに呼ぶ：描き直して保存する */
+    save: () => commit(),
+    /** 描き直さずに保存だけする（入力中の欄を描き直したくないとき） */
+    saveQuietly: () => commit({ rerender: false }),
+    /** このウィジェットの中身だけを描き直す（保存はしない） */
+    refresh: () => refreshWidgetBody(widget),
+    /** 画面の下に短いお知らせを出す */
+    toast: (message) => showToast(String(message)),
+    /** 設定に合わせて URL を開く（新しいタブ / 同じタブ）。危ない URL は開かない */
+    openUrl: (url) => {
+      const safe = safeUrl(url);
+      if (safe) window.open(safe, state.settings.openInNewTab ? "_blank" : "_self", "noopener");
+    },
+    /** ms ミリ秒ごとに fn を呼ぶ。ウィジェットが描き直されたり消えたりすると自動で止まる */
+    every: (ms, fn) => {
+      const id = setInterval(() => {
+        const root = getRoot();
+        if (root && !root.isConnected) {
+          clearInterval(id);
+          return;
+        }
+        try { fn(); } catch (err) { console.error(err); clearInterval(id); }
+      }, Math.max(250, Number(ms) || 1000));
+      widgetTimers.push(id);
+    },
+    /**
+     * 外から読み込んで表示する（読み込み中・エラー・↻ ボタン・一定時間ごとの読み込み直しつき）。
+     * load：Promise を返す関数 / view(data)：表示する要素を返す関数 / cacheKey：変わったら読み込み直す値
+     */
+    remote: ({ load, view, cacheKey = "", refreshMs = 10 * 60 * 1000 }) => {
+      if (!REMOTE_WIDGETS.includes(widget.type)) REMOTE_WIDGETS.push(widget.type);
+      return renderRemote(widget, {
+        cacheKey: String(cacheKey),
+        load,
+        view: (data) => view(data),
+        refreshMs: Math.max(60 * 1000, Number(refreshMs) || 0),
+      });
+    },
+  };
+}
+
+PD.app = {  };
+})();
+</script>

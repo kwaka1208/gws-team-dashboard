@@ -1,0 +1,169 @@
+<style>
+/*
+ * layout.css — ページ全体の骨組み（ヘッダー・グリッド・フッター）
+ *
+ * ウィジェットの幅は data-size（s / m / l / xl）で決まり、
+ * 何列ぶん使うかは下の --span-* 変数で画面幅ごとに切り替えています。
+ */
+@layer layout {
+  /* ---------- ヘッダー ---------- */
+  .app-header {
+    position: sticky;
+    top: 0;
+    z-index: 10;
+    background: var(--header-bg);
+    border-bottom: var(--header-border);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+  }
+
+  .app-header__inner {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: var(--space-3) var(--space-4);
+    max-width: var(--page-max-width);
+    margin: 0 auto;
+    padding: var(--space-4) var(--page-gutter);
+  }
+
+  .app-header__title {
+    margin-right: auto;
+    font-family: var(--app-title-font);
+    font-size: var(--app-title-size);
+    font-weight: var(--app-title-weight);
+    letter-spacing: var(--app-title-spacing);
+    text-transform: var(--app-title-transform);
+    color: var(--app-title-color);
+    background: var(--app-title-fill);
+    -webkit-background-clip: text;
+    background-clip: text;
+    overflow-wrap: anywhere;
+  }
+
+  .app-header__search {
+    flex: 0 1 320px;
+    min-width: 0;
+  }
+
+  .app-header__actions {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+  }
+
+  @media (max-width: 640px) {
+    .app-header__search {
+      order: 3;
+      flex: 1 1 100%;
+    }
+  }
+
+  /* ---------- ダッシュボードのグリッド ---------- */
+  .dashboard {
+    /* サイズごとに使う列数（広い画面） */
+    --span-s: 1;
+    --span-m: 2;
+    --span-l: 3;
+    --span-xl: var(--grid-columns);
+
+    display: grid;
+    grid-template-columns: repeat(var(--grid-columns), minmax(0, 1fr));
+    /* タイル表示：1 段の高さを固定し、ウィジェットは data-rows の段数ぶんの高さになる */
+    grid-auto-rows: var(--grid-row-height);
+    gap: var(--grid-gap);
+    align-items: stretch;
+    max-width: var(--page-max-width);
+    margin: 0 auto;
+    padding: var(--space-2) var(--page-gutter) var(--space-6);
+  }
+
+  /* 幅（列数） */
+  .dashboard > [data-size="s"]  { grid-column: span var(--span-s); }
+  .dashboard > [data-size="m"]  { grid-column: span var(--span-m); }
+  .dashboard > [data-size="l"]  { grid-column: span var(--span-l); }
+  .dashboard > [data-size="xl"] { grid-column: 1 / -1; }
+
+  /* 高さ（段数） */
+  .dashboard > [data-rows="2"] { grid-row: span 2; }
+  .dashboard > [data-rows="3"] { grid-row: span 3; }
+  .dashboard > [data-rows="4"] { grid-row: span 4; }
+
+  /* 設定で「中身に合わせる」を選んだとき：段の指定を使わず、中身の高さで並べる */
+  [data-layout="flow"] .dashboard {
+    grid-auto-rows: auto;
+    align-items: start;
+  }
+  [data-layout="flow"] .dashboard > [data-rows] { grid-row: auto; }
+
+  /* 中くらいの画面：2 列 */
+  @media (max-width: 1080px) {
+    .dashboard {
+      --grid-columns: 2;
+      --span-m: 1;
+      --span-l: 2;
+    }
+  }
+
+  /* スマートフォン：1 列 */
+  @media (max-width: 640px) {
+    .dashboard {
+      --grid-columns: 1;
+      --span-m: 1;
+      --span-l: 1;
+    }
+  }
+
+  /* ---------- フッター ---------- */
+  /* 画面のいちばん下に固定。中身がフッターに隠れないよう、ページの下に同じ高さの余白を取る */
+  body { padding-bottom: var(--footer-height); }
+
+  .app-footer {
+    position: fixed;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 10;
+    background: var(--header-bg);
+    border-top: var(--border-width) solid var(--color-border);
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+    color: var(--color-text-muted);
+    font-size: var(--font-size-xs);
+  }
+
+  .app-footer__inner {
+    display: flex;
+    align-items: center;
+    gap: var(--space-2);
+    max-width: var(--page-max-width);
+    height: var(--footer-height);
+    margin: 0 auto;
+    padding: 0 var(--page-gutter);
+  }
+  .app-footer__spacer { flex: 1; }
+  .app-footer__link {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    color: inherit;
+    text-decoration: none;
+  }
+  .app-footer__link:hover { color: var(--color-text); }
+  .app-footer__version { font-variant-numeric: tabular-nums; }
+  /* 共有中の印（firebase-config.js の SHARED_DASHBOARD） */
+  .app-footer__shared {
+    padding: 0 var(--space-2);
+    border: var(--border-width) solid var(--color-border);
+    border-radius: 999px;
+    font-size: var(--font-size-xs);
+    line-height: 1.6;
+  }
+  #user-email {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+}
+</style>

@@ -1,0 +1,485 @@
+<script>
+/**
+ * js_storage.html — サーバー（Apps Script）とのやり取りと、ダッシュボードの読み書き
+ *
+ * 画面（js_app.html）からは、タブがすべて 1 つのダッシュボードにまとまって見える：
+ *   pages = [ 組織のタブ（全社 → 部署）…, 自分のタブ … ]
+ * 組織のタブには page.unit（組織のスプレッドシート ID）が付いている。
+ * 保存するときに、ここで「自分の分」と「組織ごとの分」に分け、変わったものだけをサーバーに送る。
+ *
+ * - 自分の分：本人の UserProperties（api_savePersonal）
+ * - 組織の分：組織のスプレッドシート（api_saveUnit）。編集者でない組織の変更は保存せず、元に戻す
+ * - 別の端末・ほかの管理者が先に保存していたら、サーバーが今の内容を返すので、まとめてから保存し直す
+ */
+(function () {
+"use strict";
+const { t } = PD.i18n;
+
+class StorageError extends Error {}
+
+/* ------------------------------------------------------------------ */
+/* サーバーの呼び出し                                                     */
+/* ------------------------------------------------------------------ */
+
+/**
+ * google.script.run を Promise にする。サーバーの関数は { ok, data, error } を返す。
+ * Apps Script の外（手元のブラウザで index の見本を開いたとき）は window.PD_MOCK を使う。
+ */
+function call(name, ...args) {
+  return new Promise((resolve, reject) => {
+    const fail = (err) => reject(new StorageError(err?.message || String(err || t("error.unknownDetail"))));
+    const done = (res) => {
+      if (res && res.ok) resolve(res.data);
+      else fail(new Error(res?.error || t("error.unknownDetail")));
+    };
+    if (typeof google !== "undefined" && google.script?.run) {
+      google.script.run.withSuccessHandler(done).withFailureHandler((err) => fail(new Error(describeRunError(err))))[name](...args);
+    } else if (window.PD_MOCK?.[name]) {
+      Promise.resolve().then(() => window.PD_MOCK[name](...args)).then(done, fail);
+    } else {
+      fail(new Error(t("gas.notInAppsScript")));
+    }
+  });
+}
+
+/** google.script.run の失敗（通信・認可・複数アカウントなど）を、わかる言葉にする */
+function describeRunError(err) {
+  const message = String(err?.message || err || "");
+  if (/authoriz|認可|PERMISSION_DENIED|ScriptError: We're sorry/i.test(message)) return t("gas.authError");
+  if (/NetworkError|network/i.test(message)) return t("error.network");
+  return message || t("error.unknownDetail");
+}
+
+/* ------------------------------------------------------------------ */
+/* 見た目の設定（この端末に覚えておく。読み込み前の画面のため）              */
+/* ------------------------------------------------------------------ */
+
+const LOCAL_PREFIX = "gws-team-dashboard:";
+
+function readLocal(name) {
+  try {
+    const raw = localStorage.getItem(LOCAL_PREFIX + name);
+    return raw ? JSON.parse(raw) : null;
+  } catch {
+    return null;
+  }
+}
+
+function writeLocal(name, value) {
+  try {
+    if (value == null) localStorage.removeItem(LOCAL_PREFIX + name);
+    else localStorage.setItem(LOCAL_PREFIX + name, JSON.stringify(value));
+  } catch { /* 使えない環境 */ }
+}
+
+function readAppearance() {
+  return readLocal("appearance");
+}
+
+function writeAppearance(settings) {
+  const { language, mode, preset, density } = settings || {};
+  writeLocal("appearance", { language, mode, preset, density });
+}
+
+/* 個人版の「共有モード」の名残り（このアプリでは使わない） */
+const isShared = false;
+const isConfigured = true;
+const PERSONAL_KEYS = [];
+function readPersonal() { return {}; }
+function writePersonal() {}
+
+/* ------------------------------------------------------------------ */
+/* ログイン：Apps Script が Google アカウントで本人を確かめているので、何もしない */
+/* ------------------------------------------------------------------ */
+
+let boot = window.__BOOT__ || null; // 最後に読み込んだ api_load の結果（{ ok, data } の data）
+let currentUser = null;
+
+async function initFirebase() {}
+
+function watchUser(callback) {
+  const email = boot?.ok ? boot.data.user.email : "";
+  currentUser = { uid: email || "me", email };
+  callback(currentUser);
+}
+
+async function signIn() {}
+async function signOut() {}
+
+/* Google カレンダー・Gmail は、サーバーが本人の権限で読むので、連携の操作はいらない */
+function canUseGoogleApi() { return true; }
+function getGoogleToken() { return "apps-script"; }
+function getGoogleConnection() { return { scopes: [], expiresAt: Infinity }; }
+function forgetGoogleToken() {}
+async function connectGoogle() { return "apps-script"; }
+
+/* ------------------------------------------------------------------ */
+/* 組織                                                                 */
+/* ------------------------------------------------------------------ */
+
+/** 見られる組織 [{ id, name, kind, canEdit }]（全社 → 部署の順） */
+let units = [];
+
+function unitList() {
+  return units;
+}
+
+function unitById(id) {
+  return units.find((u) => u.id === id) || null;
+}
+
+function canEditUnit(id) {
+  return Boolean(unitById(id)?.canEdit);
+}
+
+/** まだ一度も保存していない組織の、最初のタブ（お知らせを大きく置く） */
+function defaultUnitPart(unit) {
+  return {
+    pages: [{
+      id: `org-${unit.id.slice(-8)}`,
+      name: unit.name,
+      widgets: [
+        { id: `notice-${unit.id.slice(-6)}`, type: "notice", title: t("widget.notice"), size: "l", rows: 3, scope: unit.id },
+      ],
+    }],
+  };
+}
+
+/* ------------------------------------------------------------------ */
+/* 1 つにまとめる・分ける                                                  */
+/* ------------------------------------------------------------------ */
+
+function combine(personal, parts) {
+  const unitPages = units.flatMap((u) => (parts.get(u.id)?.pages || []).map((p) => ({ ...p, unit: u.id })));
+  return { ...personal, pages: [...unitPages, ...(personal.pages || [])] };
+}
+
+function split(data) {
+  const personal = { ...data, pages: (data.pages || []).filter((p) => !p.unit) };
+  const parts = new Map(units.map((u) => [u.id, { pages: [] }]));
+  for (const p of data.pages || []) {
+    if (!p.unit || !parts.has(p.unit)) continue;
+    const { unit, ...page } = p;
+    parts.get(unit).pages.push(page);
+  }
+  return { personal, parts };
+}
+
+function parse(json, fallback) {
+  if (!json) return fallback;
+  try {
+    return JSON.parse(json);
+  } catch {
+    throw new StorageError(t("error.unreadableData"));
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 読み込み                                                              */
+/* ------------------------------------------------------------------ */
+
+const DEFAULT_DASHBOARD = {
+  version: 2,
+  title: (window.__BOOT__?.ok && window.__BOOT__.data.title) || { ja: "ダッシュボード", en: "Dashboard" },
+  settings: { mode: "auto", preset: "", openInNewTab: true, useFavicons: true, layout: "tile" },
+  pages: [
+    {
+      id: "home",
+      name: { ja: "マイページ", en: "My page" },
+      widgets: [
+        { id: "search", type: "search", title: { ja: "検索", en: "Search" }, size: "l", rows: 1, searchUrl: "https://www.google.com/search?q=%s" },
+        { id: "clock", type: "clock", title: { ja: "時計", en: "Clock" }, size: "s", rows: 1, timeZone: "" },
+        { id: "notices", type: "notice", title: { ja: "お知らせ", en: "Announcements" }, size: "l", rows: 3, scope: "all" },
+        { id: "calendar", type: "calendar", title: { ja: "今日からの予定", en: "Upcoming events" }, size: "m", rows: 3, days: 3, allCalendars: true },
+        { id: "mail", type: "mail", title: { ja: "未読メール", en: "Unread mail" }, size: "s", rows: 1, label: "INBOX" },
+        {
+          id: "links", type: "links", title: { ja: "よく使うリンク", en: "Links" }, size: "m", rows: 2, view: "list",
+          items: [
+            { id: "gmail", title: "Gmail", url: "https://mail.google.com/", icon: "", description: "" },
+            { id: "drive", title: "Google ドライブ", url: "https://drive.google.com/", icon: "", description: "" },
+            { id: "cal", title: "Google カレンダー", url: "https://calendar.google.com/", icon: "", description: "" },
+          ],
+        },
+        {
+          id: "todo", type: "todo", title: { ja: "ToDo", en: "To-do" }, size: "m", rows: 3, items: [],
+          categories: [{ id: "work", name: { ja: "仕事", en: "Work" } }, { id: "later", name: { ja: "あとで", en: "Later" } }],
+        },
+        { id: "memo", type: "note", title: { ja: "メモ", en: "Notes" }, size: "m", rows: 2, text: "" },
+      ],
+    },
+  ],
+};
+
+async function loadDefault() {
+  return JSON.parse(JSON.stringify(DEFAULT_DASHBOARD));
+}
+
+/** 保存のもと：分けた内容（JSON 文字列）と、その版 */
+let base = { personal: null, units: new Map() };
+let versions = { personal: null, units: new Map() };
+/** 読み込んだが、まだ画面に反映していない版（setBase で「もと」になったときに採用する） */
+let candidate = null;
+
+/** api_load の結果から、まとめたダッシュボードを作る */
+async function fromLoad(data) {
+  units = data.units.map(({ id, name, kind, canEdit }) => ({ id, name, kind, canEdit }));
+  const personal = parse(data.personal.json, null) || (await loadDefault());
+  if (!Array.isArray(personal.pages) || personal.pages.length === 0) personal.pages = (await loadDefault()).pages;
+  const parts = new Map(data.units.map((u) => {
+    const part = parse(u.json, null);
+    return [u.id, part && Array.isArray(part.pages) ? part : defaultUnitPart(u)];
+  }));
+  candidate = {
+    personal: data.personal.version,
+    units: new Map(data.units.map((u) => [u.id, u.version])),
+  };
+  setNotices(data.notices, data.noticeRead);
+  return combine(personal, parts);
+}
+
+async function fetchLoad(options) {
+  const data = await call("api_load", options || {});
+  boot = { ok: true, data };
+  return data;
+}
+
+/**
+ * @returns {Promise<{ data: object, mode: "remote" }>}
+ */
+async function load() {
+  let data;
+  if (boot) {
+    if (!boot.ok) throw new StorageError(boot.error);
+    data = boot.data;
+  } else {
+    data = await fetchLoad();
+  }
+  if (currentUser && data.user?.email) Object.assign(currentUser, { uid: data.user.email, email: data.user.email });
+  const combined = await fromLoad(data);
+  rememberAppearance(combined);
+  return { data: combined, mode: "remote" };
+}
+
+function rememberAppearance(data) {
+  writeAppearance(data?.settings);
+}
+
+/**
+ * 画面がこの内容（まとめたダッシュボードの JSON）になった、と知らせる。
+ * 補正（normalize）したあとの内容を「もと」にするので、読み込んだだけでは保存が走らない。
+ */
+function setBase(json) {
+  const { personal, parts } = split(JSON.parse(json));
+  base = {
+    personal: JSON.stringify(personal),
+    units: new Map([...parts].map(([id, part]) => [id, JSON.stringify(part)])),
+  };
+  if (candidate) {
+    versions = candidate;
+    candidate = null;
+  }
+}
+
+/* ------------------------------------------------------------------ */
+/* 保存                                                                 */
+/* ------------------------------------------------------------------ */
+
+/**
+ * 1 つ分を保存する。先に保存されていたら、merge(もと, 自分, いま) でまとめて保存し直す。
+ * @returns {Promise<{ value: object, json: string, version: string, merged: boolean }>}
+ */
+async function saveOne(fn, idArgs, value, baseJson, version, merge, pick) {
+  let json = JSON.stringify(value);
+  let res = await call(fn, ...idArgs, json, version);
+  if (!res.conflict) return { value, json, version: res.version, merged: false };
+
+  const remote = parse(res.json, null);
+  let merged = value;
+  if (remote && merge) {
+    try {
+      merged = pick(merge(baseJson ? JSON.parse(baseJson) : remote, value, remote));
+    } catch { /* まとめられないときは、自分の内容で保存する */ }
+  }
+  json = JSON.stringify(merged);
+  res = await call(fn, ...idArgs, json, res.version);
+  if (res.conflict) throw new StorageError(t("gas.conflict"));
+  return { value: merged, json, version: res.version, merged: true };
+}
+
+/**
+ * 保存する。
+ * @returns {Promise<{ merged: object, json: string, reverted: boolean } | null>}
+ *   まとめた・元に戻したときは、その内容（画面に反映すること）
+ */
+async function save(data, mode, merge) {
+  rememberAppearance(data);
+  const { personal, parts } = split(data);
+  let changed = false;
+  let reverted = false;
+  let outPersonal = personal;
+  const outParts = new Map(parts);
+
+  // 編集できない組織のタブが変わっていたら、保存せずに元に戻す
+  for (const u of units) {
+    const json = JSON.stringify(parts.get(u.id));
+    const was = base.units.get(u.id);
+    if (!u.canEdit && was != null && json !== was) {
+      outParts.set(u.id, JSON.parse(was));
+      reverted = true;
+    }
+  }
+
+  const personalJson = JSON.stringify(personal);
+  if (personalJson !== base.personal) {
+    const r = await saveOne("api_savePersonal", [], personal, base.personal, versions.personal, merge, (x) => x);
+    outPersonal = r.value;
+    base.personal = r.json;
+    versions.personal = r.version;
+    changed ||= r.merged;
+  }
+
+  for (const u of units) {
+    if (!u.canEdit) continue;
+    const part = parts.get(u.id);
+    const json = JSON.stringify(part);
+    const was = base.units.get(u.id);
+    if (json === was) continue;
+    const r = await saveOne("api_saveUnit", [u.id], part, was, versions.units.get(u.id), merge, (x) => ({ pages: x.pages }));
+    outParts.set(u.id, r.value);
+    base.units.set(u.id, r.json);
+    versions.units.set(u.id, r.version);
+    changed ||= r.merged;
+  }
+
+  if (!changed && !reverted) return null;
+  const merged = combine(outPersonal, outParts);
+  return { merged, json: JSON.stringify(merged), reverted };
+}
+
+/* ------------------------------------------------------------------ */
+/* ほかの人・ほかの端末の変更を受け取る（数分ごとに読み直す）                   */
+/* ------------------------------------------------------------------ */
+
+const POLL_MS = 3 * 60 * 1000;
+const POLL_MIN_GAP_MS = 30 * 1000;
+let pollTimer = null;
+let lastPoll = 0;
+let watching = null;
+
+function sameVersions(data) {
+  const now = versions;
+  if (data.personal.version !== now.personal) return false;
+  if (data.units.length !== units.length) return false;
+  for (const u of data.units) {
+    const known = unitById(u.id);
+    if (!known || known.canEdit !== u.canEdit || known.name !== u.name) return false;
+    if (u.version !== now.units.get(u.id)) return false;
+  }
+  return true;
+}
+
+/** 今の内容を読み直す。画面の内容と同じ版なら null */
+async function fetchLatest() {
+  lastPoll = Date.now();
+  const data = await fetchLoad();
+  setNotices(data.notices, data.noticeRead);
+  if (sameVersions(data)) return null;
+  const combined = await fromLoad(data);
+  return { data: combined, json: JSON.stringify(combined) };
+}
+
+async function poll() {
+  if (!watching || document.hidden) return;
+  if (Date.now() - lastPoll < POLL_MIN_GAP_MS) return;
+  try {
+    const latest = await fetchLatest();
+    if (latest) watching(latest.data, latest.json);
+  } catch (err) {
+    console.warn(err); // 通信が切れたなど。次の読み直しで再開する
+  }
+}
+
+function onVisible() {
+  if (!document.hidden) poll();
+}
+
+function watch(callback) {
+  stopWatching();
+  watching = callback;
+  lastPoll = Date.now();
+  pollTimer = setInterval(poll, POLL_MS);
+  document.addEventListener("visibilitychange", onVisible);
+}
+
+function stopWatching() {
+  clearInterval(pollTimer);
+  pollTimer = null;
+  watching = null;
+  document.removeEventListener("visibilitychange", onVisible);
+}
+
+/* ------------------------------------------------------------------ */
+/* お知らせ                                                              */
+/* ------------------------------------------------------------------ */
+
+let notices = [];
+let readIds = new Set();
+const noticeListeners = new Set();
+
+function setNotices(list, read) {
+  notices = Array.isArray(list) ? list : [];
+  if (Array.isArray(read)) {
+    // サーバーの既読に、まだ届いていないこの画面の既読を足す
+    for (const id of read) readIds.add(id);
+  }
+  for (const fn of noticeListeners) fn();
+}
+
+/** 見られるお知らせ（新しい順）。scope が組織の ID なら、その組織の分だけ */
+function getNotices(scope = "all") {
+  return scope && scope !== "all" ? notices.filter((n) => n.unitId === scope) : notices;
+}
+
+function isNoticeRead(id) {
+  return readIds.has(id);
+}
+
+function onNoticesChanged(fn) {
+  noticeListeners.add(fn);
+}
+
+async function markNoticesRead(ids) {
+  const fresh = ids.filter((id) => !readIds.has(id));
+  if (!fresh.length) return;
+  for (const id of fresh) readIds.add(id);
+  for (const fn of noticeListeners) fn();
+  try {
+    await call("api_markNoticesRead", fresh);
+  } catch (err) {
+    console.warn(err); // 既読が残らなくても、表示はそのまま使える
+  }
+}
+
+async function postNotice(unitId, notice) {
+  const list = await call("api_postNotice", unitId, notice);
+  setNotices(list);
+}
+
+async function deleteNotice(notice) {
+  const list = await call("api_deleteNotice", notice.unitId, notice.noticeId);
+  setNotices(list);
+}
+
+PD.storage = {
+  StorageError,
+  call,
+  isShared, isConfigured, PERSONAL_KEYS,
+  readPersonal, writePersonal, readAppearance, writeAppearance,
+  initFirebase, watchUser, signIn, signOut,
+  canUseGoogleApi, getGoogleToken, getGoogleConnection, forgetGoogleToken, connectGoogle,
+  unitList, unitById, canEditUnit,
+  loadDefault, load, setBase, save, watch, fetchLatest, stopWatching,
+  getNotices, isNoticeRead, onNoticesChanged, markNoticesRead, postNotice, deleteNotice,
+};
+})();
+</script>

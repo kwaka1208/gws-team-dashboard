@@ -1,0 +1,12 @@
+{
+  "name": "gws-team-dashboard",
+  "private": true,
+  "description": "Google Workspace の組織で使う、共通（全社・部署）と個人を分けたダッシュボード（Apps Script + Google サイト）",
+  "license": "MIT",
+  "scripts": {
+    "test": "node tests/server.test.js",
+    "preview": "node dev/preview.mjs",
+    "push": "clasp push",
+    "deploy": "clasp push && clasp deploy --deploymentId \"$DEPLOYMENT_ID\" --description \"$(date +%Y-%m-%d)\""
+  }
+}

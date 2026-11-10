@@ -1,0 +1,66 @@
+<script>
+/**
+ * js_google.html — Google カレンダーと Gmail
+ *
+ * 個人版はブラウザから Google の API を直接呼んでいたが、ここではサーバー（Apps Script）が
+ * 開いている本人の権限で読む（api_calendar / api_gmail）。連携ボタンやトークンの期限切れはない。
+ */
+(function () {
+"use strict";
+const { t } = PD.i18n;
+const { call } = PD.storage;
+
+/** 個人版との互換のための名前（このアプリでは使わない） */
+const CALENDAR_SCOPE = "calendar";
+const GMAIL_SCOPE = "gmail";
+
+class GoogleApiError extends Error {
+  constructor(message, { expired = false, link = null } = {}) {
+    super(message);
+    this.expired = expired;
+    this.link = link;
+  }
+}
+
+/**
+ * 今日から days 日分の予定を、開始時刻順に返す（終わった予定は除く）。
+ * @returns {Promise<Array<{ id, title, start: Date, end: Date, allDay: boolean, link, color, calendar }>>}
+ */
+async function fetchCalendarEvents(_token, { days = 3, allCalendars = true } = {}) {
+  const now = new Date();
+  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const to = new Date(from);
+  to.setDate(to.getDate() + days);
+
+  let items;
+  try {
+    items = await call("api_calendar", { timeMin: from.toISOString(), timeMax: to.toISOString(), allCalendars: Boolean(allCalendars) });
+  } catch (err) {
+    throw new GoogleApiError(err.message);
+  }
+  // 終日の予定の日付（YYYY-MM-DD）は、その地域の 0 時として扱う
+  const parse = (v) => (v?.dateTime ? new Date(v.dateTime) : new Date(`${v?.date}T00:00:00`));
+  return items
+    .map((ev) => ({
+      ...ev,
+      title: ev.title || t("googleApi.noTitle"),
+      start: parse(ev.start),
+      end: parse(ev.end),
+      allDay: Boolean(ev.start?.date),
+    }))
+    .filter((ev) => ev.end > now)
+    .sort((a, b) => (a.start - b.start) || (Number(b.allDay) - Number(a.allDay)));
+}
+
+/** Gmail のラベル（INBOX など）の未読件数 */
+async function fetchGmailUnread(_token, labelId = "INBOX") {
+  try {
+    return await call("api_gmail", labelId);
+  } catch (err) {
+    throw new GoogleApiError(err.message);
+  }
+}
+
+PD.google = { CALENDAR_SCOPE, GMAIL_SCOPE, GoogleApiError, fetchCalendarEvents, fetchGmailUnread };
+})();
+</script>

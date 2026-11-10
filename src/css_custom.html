@@ -1,0 +1,31 @@
+<style>
+/*
+ * custom.css — あなた専用の上書き用ファイル
+ *
+ * このファイルは最も優先度の高いレイヤー（custom）なので、
+ * ここに書いたスタイルは詳細度に関係なく他の CSS に勝ちます。
+ * 本家（テンプレート元）は今後もこのファイルを空のまま保つので、
+ * 本家の更新を取り込むときに衝突しにくくなっています。
+ *
+ * 例:
+ *
+ * @layer custom {
+ *   :root {
+ *     --color-accent: light-dark(#7a3fb0, #c9a2f0);
+ *     --grid-columns: 5;
+ *     --radius-lg: 20px;
+ *   }
+ *
+ *   body {
+ *     background: url("../images/wallpaper.jpg") center / cover fixed;
+ *   }
+ *
+ *   .widget {
+ *     backdrop-filter: blur(8px);
+ *     background: color-mix(in srgb, var(--color-surface) 80%, transparent);
+ *   }
+ * }
+ */
+@layer custom {
+}
+</style>

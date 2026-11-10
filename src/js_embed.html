@@ -1,0 +1,113 @@
+<script>
+/* converted from js/embed.js */
+(function () {
+"use strict";
+/**
+ * embed.js — 埋め込みウィジェットに貼られた URL の変換
+ *
+ * YouTube の URL（ブラウザのアドレスバーや「共有」でコピーしたもの）を、
+ * 埋め込み用のプレーヤーの URL に変換します。
+ *
+ * 対応している形式の例:
+ *   https://www.youtube.com/watch?v=VIDEO_ID
+ *   https://www.youtube.com/watch?v=VIDEO_ID&list=PLAYLIST_ID&t=90
+ *   https://youtu.be/VIDEO_ID?t=1m30s
+ *   https://www.youtube.com/shorts/VIDEO_ID
+ *   https://www.youtube.com/live/VIDEO_ID
+ *   https://www.youtube.com/embed/VIDEO_ID
+ *   https://www.youtube.com/playlist?list=PLAYLIST_ID
+ *   https://m.youtube.com/... / https://music.youtube.com/...
+ */
+
+const YOUTUBE_HOSTS = new Set(["youtube.com", "youtube-nocookie.com", "youtu.be"]);
+const VIDEO_ID = /^[\w-]{11}$/;
+
+/** "90" / "90s" / "1m30s" / "1h2m3s" を秒に変換する */
+function parseYouTubeTime(value) {
+  if (!value) return 0;
+  const text = String(value).trim();
+  if (/^\d+s?$/.test(text)) return parseInt(text, 10);
+  const m = text.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?$/);
+  if (!m || !m[0]) return 0;
+  return (Number(m[1] || 0) * 3600) + (Number(m[2] || 0) * 60) + Number(m[3] || 0);
+}
+
+/**
+ * YouTube の URL なら埋め込み用の情報を返す。YouTube でなければ null。
+ * @returns {{ src: string, vertical: boolean } | null}
+ */
+function toYouTubeEmbed(raw) {
+  let url;
+  try {
+    url = new URL(String(raw).trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  const host = url.hostname.toLowerCase().replace(/^(www\.|m\.|music\.)/, "");
+  if (!YOUTUBE_HOSTS.has(host)) return null;
+
+  let id = null;
+  let vertical = false;
+  if (host === "youtu.be") {
+    id = url.pathname.split("/")[1] || null;
+  } else if (url.pathname === "/watch") {
+    id = url.searchParams.get("v");
+  } else {
+    const m = url.pathname.match(/^\/(embed|shorts|live|v)\/([^/]+)/);
+    if (m) {
+      id = m[2];
+      vertical = m[1] === "shorts";
+    }
+  }
+  if (id && !VIDEO_ID.test(id)) id = null;
+
+  const list = url.searchParams.get("list");
+  const validList = list && /^[\w-]+$/.test(list) ? list : null;
+  if (!id && !validList) return null;
+
+  const params = new URLSearchParams();
+  if (validList) params.set("list", validList);
+  const start = parseYouTubeTime(url.searchParams.get("t") || url.searchParams.get("start"));
+  if (start > 0) params.set("start", String(start));
+  params.set("rel", "0"); // 再生後のおすすめを同じチャンネルの動画に限る
+
+  // youtube-nocookie.com はプライバシー強化モード（再生するまで Cookie を使わない）
+  const path = id ? `embed/${id}` : "embed/videoseries";
+  return { src: `https://www.youtube-nocookie.com/${path}?${params}`, vertical };
+}
+
+/**
+ * 写真ウィジェットに貼られた URL を、<img> で表示できる画像の URL に変換する。
+ * - Google ドライブの共有リンク（https://drive.google.com/file/d/ID/view など）
+ *   → https://lh3.googleusercontent.com/d/ID（「リンクを知っている全員」に公開したファイルのみ表示できる）
+ * - Dropbox の共有リンク（?dl=0）→ ?raw=1
+ * - それ以外の http(s) の URL はそのまま
+ * http(s) でなければ null。
+ */
+function toImageUrl(raw) {
+  let url;
+  try {
+    url = new URL(String(raw).trim());
+  } catch {
+    return null;
+  }
+  if (url.protocol !== "https:" && url.protocol !== "http:") return null;
+  const host = url.hostname.toLowerCase();
+
+  if (host === "drive.google.com" || host === "docs.google.com") {
+    const m = url.pathname.match(/\/file\/d\/([\w-]+)/);
+    const id = m ? m[1] : url.searchParams.get("id");
+    if (id && /^[\w-]+$/.test(id)) return `https://lh3.googleusercontent.com/d/${id}`;
+  }
+  if (host === "www.dropbox.com" || host === "dropbox.com") {
+    url.searchParams.delete("dl");
+    url.searchParams.set("raw", "1");
+    return url.href;
+  }
+  return url.href;
+}
+
+PD.embed = { parseYouTubeTime, toYouTubeEmbed, toImageUrl };
+})();
+</script>

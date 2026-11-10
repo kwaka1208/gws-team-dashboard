@@ -1,0 +1,43 @@
+<script>
+/* converted from js/config.js */
+(function () {
+"use strict";
+/**
+ * config.js — テンプレートから作った人が自由に変えてよい設定
+ */
+
+/**
+ * 設定画面の「テーマ」に並ぶ選択肢。id は css/themes.css の data-preset と対応。
+ * note は見本の下に小さく表示される補足（任意）。
+ */
+const THEME_PRESETS = [
+  { id: "", label: "theme.default" },
+  { id: "glass", label: "theme.glass" },
+  { id: "brutal", label: "theme.brutal" },
+  { id: "terminal", label: "theme.terminal", note: "theme.terminalNote" },
+  { id: "midnight", label: "theme.midnight" },
+  { id: "editorial", label: "theme.editorial" },
+  { id: "indigo", label: "theme.indigo" },
+  { id: "washi", label: "theme.washi" },
+  { id: "mono", label: "theme.mono" },
+];
+
+/** 初めて開いたとき（保存データがないとき）に読み込むレイアウト */
+const DEFAULT_DASHBOARD_URL = "default-dashboard.json";
+
+/**
+ * アイコン未設定のリンクに使うファビコン取得サービス（Chrome などが使っている Google のサービス）。
+ * {url} は「ドメイン＋最初の階層」（例：https://docs.google.com/document/）に置き換わるので、
+ * Google ドキュメント・スプレッドシートのように同じドメインでもページごとのアイコンが出る。
+ * 文書の ID や検索条件など、それより後ろの部分は送らない。
+ * ここで見つからなければ、サイト自身の /favicon.ico、それもなければ頭文字を表示する。
+ */
+const FAVICON_URL =
+  "https://t3.gstatic.com/faviconV2?client=SOCIAL&type=FAVICON&fallback_opts=TYPE,SIZE,URL&size=64&url={url}";
+
+/** 編集してから保存するまでの待ち時間（ミリ秒） */
+const SAVE_DELAY_MS = 800;
+
+PD.config = { THEME_PRESETS, DEFAULT_DASHBOARD_URL, FAVICON_URL, SAVE_DELAY_MS };
+})();
+</script>

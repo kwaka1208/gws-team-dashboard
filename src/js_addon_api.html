@@ -1,0 +1,64 @@
+<script>
+/* converted from js/addon-api.js */
+(function () {
+"use strict";
+/**
+ * addon-api.js — アドオン（自作ウィジェット）を登録するための窓口
+ *
+ * アドオンのファイルからこのファイルの registerWidget() を呼ぶと、
+ * ウィジェットの種類が 1 つ増えます。書き方は WIDGET.md を見てください。
+ *
+ *   import { registerWidget } from "../js/addon-api.js";
+ *   registerWidget({ type: "hello", name: "あいさつ", render: (widget, api) => api.h("p", {}, "こんにちは") });
+ *
+ * app.js は、public/addons/index.js を読み込んだあとに、ここに登録されたものを取り込みます。
+ */
+
+/** 登録されたアドオン（type → 定義） */
+const addons = new Map();
+
+/** 設定欄の種類 */
+const FIELD_TYPES = ["text", "textarea", "number", "url", "date", "time", "color", "select", "checkbox"];
+
+const TYPE_PATTERN = /^[a-z][a-z0-9-]{1,30}$/;
+
+/**
+ * ウィジェットの種類を 1 つ登録する。
+ *
+ * @param {object} def
+ * @param {string} def.type        種類の名前（英小文字・数字・ハイフン。保存データの "type" になる）
+ * @param {string | Record<string, string>} def.name  編集画面の「種類」に出す名前。言語ごとに変えるなら { ja: "…", en: "…" }
+ * @param {(widget: object, api: object) => Node | null} def.render  ウィジェットの中身を作って返す
+ * @param {Array<object>} [def.fields]   編集画面の設定欄（WIDGET.md の「設定欄」）
+ * @param {number} [def.defaultRows]     新しく追加したときの高さ（1〜4 段。省略時 2）
+ * @param {{ size?: string, rows?: number }} [def.minSize]  最小の幅（s/m/l/xl）と高さ
+ * @param {number} [def.fixedRows]       高さを固定する段数
+ * @param {(widget: object) => void} [def.normalize]  読み込んだデータの補正（設定欄の値は自動で補正済み）
+ * @param {string} [def.css]             このウィジェット用の CSS（そのまま読み込まれる）
+ */
+function registerWidget(def) {
+  if (!def || typeof def !== "object") throw new Error("registerWidget：定義（オブジェクト）を渡してください");
+  const { type, name, render } = def;
+  if (!TYPE_PATTERN.test(String(type))) {
+    throw new Error(`registerWidget：type「${type}」は英小文字・数字・ハイフンで 2〜31 文字にしてください`);
+  }
+  const validName = (typeof name === "string" && name.trim())
+    || (name && typeof name === "object" && Object.values(name).some((v) => typeof v === "string" && v.trim()));
+  if (!validName) throw new Error(`registerWidget（${type}）：name を指定してください（文字列か { ja: "…", en: "…" }）`);
+  if (typeof render !== "function") throw new Error(`registerWidget（${type}）：render 関数を指定してください`);
+  if (addons.has(type)) throw new Error(`registerWidget：type「${type}」はすでに登録されています`);
+  const fields = Array.isArray(def.fields) ? def.fields : [];
+  for (const field of fields) {
+    if (!field || !/^[A-Za-z][A-Za-z0-9_]*$/.test(String(field.name))) {
+      throw new Error(`registerWidget（${type}）：設定欄の name は英字で始まる英数字にしてください`);
+    }
+    if (field.type && !FIELD_TYPES.includes(field.type)) {
+      throw new Error(`registerWidget（${type}）：設定欄の type「${field.type}」は使えません（${FIELD_TYPES.join(" / ")}）`);
+    }
+  }
+  addons.set(type, { ...def, fields });
+}
+
+PD.addon_api = { addons, FIELD_TYPES, registerWidget };
+})();
+</script>

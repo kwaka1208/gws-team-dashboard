@@ -1,0 +1,164 @@
+<style>
+/*
+ * css_org.html — 組織のタブ・お知らせウィジェット・重要なお知らせの帯
+ * 色や大きさは tokens.css の変数を使い、テーマに合わせて変わるようにしています。
+ */
+@layer components {
+  /* ---------- タブ：組織のタブ ---------- */
+  .tab-item--org .tab {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35em;
+  }
+  .tab__org-mark {
+    font-size: 0.75em;
+    opacity: 0.7;
+  }
+  .tabs__divider {
+    align-self: stretch;
+    width: 1px;
+    margin: 0.35rem 0.4rem;
+    background: var(--color-border);
+    flex: none;
+  }
+  .tabs__add + .tabs__add { margin-left: 0.25rem; }
+
+  .org-note {
+    grid-column: 1 / -1;
+    margin: 0;
+    padding: 0.6rem 0.9rem;
+    border: 1px dashed var(--color-border);
+    border-radius: var(--radius-md);
+    color: var(--color-text-muted);
+    font-size: 0.875rem;
+  }
+
+  /* ---------- お知らせウィジェット ---------- */
+  .notice {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-height: 0;
+    height: 100%;
+  }
+  .notice__bar {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    font-size: 0.8125rem;
+    color: var(--color-text-muted);
+  }
+  .notice__bar-spacer { flex: 1; }
+  .notice__count strong { color: var(--color-accent); }
+  .notice-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    overflow: auto;
+    min-height: 0;
+    flex: 1;
+  }
+  .notice-item {
+    border-top: 1px solid var(--color-border);
+  }
+  .notice-item:first-child { border-top: 0; }
+  .notice-item > details > summary {
+    display: grid;
+    grid-template-columns: 0.6rem 1fr;
+    column-gap: 0.4rem;
+    align-items: baseline;
+    padding: 0.45rem 0.1rem;
+    cursor: pointer;
+    list-style: none;
+  }
+  .notice-item > details > summary::-webkit-details-marker { display: none; }
+  .notice-item__dot {
+    width: 0.5rem;
+    height: 0.5rem;
+    border-radius: 50%;
+    background: transparent;
+    align-self: center;
+  }
+  .notice-item.is-unread .notice-item__dot { background: var(--color-accent); }
+  .notice-item__title {
+    font-weight: 500;
+    overflow-wrap: anywhere;
+  }
+  .notice-item.is-unread .notice-item__title { font-weight: 700; }
+  .notice-item__important {
+    display: inline-block;
+    margin-right: 0.35em;
+    padding: 0 0.4em;
+    border-radius: 4px;
+    font-size: 0.75em;
+    font-weight: 700;
+    color: #fff;
+    background: var(--color-danger);
+    vertical-align: 0.1em;
+  }
+  .notice-item__meta {
+    grid-column: 2;
+    font-size: 0.75rem;
+    color: var(--color-text-muted);
+  }
+  .notice-item__body {
+    margin: 0 0 0.6rem 1rem;
+    font-size: 0.875rem;
+    overflow-wrap: anywhere;
+  }
+  .notice-item__body > :first-child { margin-top: 0; }
+  .notice-item__body > :last-child { margin-bottom: 0; }
+  .notice-item__actions {
+    display: flex;
+    justify-content: flex-end;
+    margin: 0 0 0.5rem;
+  }
+
+  /* ---------- 投稿のダイアログ ---------- */
+  .notice-form textarea { min-height: 9rem; }
+
+  /* ---------- 重要なお知らせの帯 ---------- */
+  .notice-bar {
+    box-sizing: border-box;
+    width: calc(100% - 2 * var(--page-gutter));
+    display: flex;
+    align-items: center;
+    gap: var(--space-2) var(--space-3);
+    flex-wrap: nowrap;
+    max-width: calc(var(--page-max-width) - 2 * var(--page-gutter));
+    margin: 0 auto var(--space-3);
+    padding: var(--space-2) var(--space-4);
+    border-radius: var(--radius-md);
+    border: 1px solid var(--color-danger);
+    background: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface));
+    font-size: 0.9rem;
+  }
+  .notice-bar[hidden] { display: none; }
+  .notice-bar__label {
+    font-weight: 700;
+    color: var(--color-danger);
+  }
+  .notice-bar__title { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .notice-bar > * { flex-shrink: 0; }
+  .notice-bar > .notice-bar__title { flex-shrink: 1; }
+}
+</style>
+<style>
+@layer components {
+  .visually-hidden {
+    position: absolute !important;
+    width: 1px; height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+</style>
+<style>
+@layer components {
+  /* 編集モードのときは、閲覧のみのタブを開いていてもタブの操作を出す（<html data-edit-mode>） */
+  [data-edit-mode] .tab-item__handle,
+  [data-edit-mode] .tab-item__tools { display: inline-flex; }
+}
+</style>

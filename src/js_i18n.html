@@ -1,0 +1,91 @@
+<script>
+/* converted from js/i18n.js */
+(function () {
+"use strict";
+/**
+ * i18n.js — 画面の言語（多言語対応）
+ *
+ * 文言は public/js/locales/<言語>.js に「キー: 文」の形でまとめています。
+ * 画面からは t("キー", { 名前: 値 }) で取り出します。文の中の {名前} が値に置き換わります。
+ * HTML では data-i18n="キー"（中の文字）、data-i18n-placeholder / -title / -aria-label（各属性）を付けます。
+ *
+ * 言語を増やすときは、locales に ja.js をコピーして翻訳し、下の LANGUAGES と MESSAGES に足します（README 参照）。
+ */
+const ja = PD.locale_ja;
+const en = PD.locale_en;
+/** 選べる言語（設定画面の並び順） */
+const LANGUAGES = [
+  { id: "ja", label: "日本語", locale: "ja-JP" },
+  { id: "en", label: "English", locale: "en-US" },
+];
+
+const MESSAGES = { ja, en };
+const FALLBACK = "en";
+
+let current = "ja";
+
+/** 設定の値（"auto" / "ja" / "en" …）から、実際に使う言語を決める */
+function resolveLanguage(pref) {
+  if (pref && pref !== "auto" && MESSAGES[pref]) return pref;
+  const preferred = navigator.languages?.length ? navigator.languages : [navigator.language || ""];
+  for (const tag of preferred) {
+    const base = String(tag).toLowerCase().split("-")[0];
+    if (MESSAGES[base]) return base;
+  }
+  return FALLBACK;
+}
+
+/** 言語を切り替える（画面の書き直しは呼び出し側で行う）。変わったら true */
+function setLanguage(pref) {
+  const next = resolveLanguage(pref);
+  const changed = next !== current;
+  current = next;
+  document.documentElement.lang = current;
+  return changed;
+}
+
+/** 今の言語（"ja" / "en" …） */
+function language() {
+  return current;
+}
+
+/** 日付・時刻の表示に使うロケール（"ja-JP" / "en-US" …） */
+function locale() {
+  return LANGUAGES.find((l) => l.id === current)?.locale || current;
+}
+
+/** 文言を取り出す。見つからなければ英語 → 日本語 → キーそのもの */
+function t(key, params) {
+  const text = MESSAGES[current]?.[key] ?? MESSAGES[FALLBACK]?.[key] ?? MESSAGES.ja?.[key] ?? key;
+  if (!params) return text;
+  return text.replace(/\{(\w+)\}/g, (all, name) => (params[name] ?? all));
+}
+
+/**
+ * 言語ごとの値から、今の言語のものを選ぶ（アドオンの名前など）。
+ * 文字列ならそのまま、{ ja: "…", en: "…" } なら今の言語 → 英語 → 日本語 → 最初の値。
+ */
+function localized(value) {
+  if (value == null) return "";
+  if (typeof value !== "object") return String(value);
+  return value[current] ?? value[FALLBACK] ?? value.ja ?? Object.values(value)[0] ?? "";
+}
+
+/** アドオンなどから文言を足す：addMessages("ja", { "myaddon.hello": "こんにちは" }) */
+function addMessages(lang, messages) {
+  if (!MESSAGES[lang]) return;
+  Object.assign(MESSAGES[lang], messages);
+}
+
+/** HTML の data-i18n 系の属性を、今の言語の文言に置き換える */
+function applyI18n(root = document) {
+  for (const node of root.querySelectorAll("[data-i18n]")) node.textContent = t(node.dataset.i18n);
+  for (const [attr, name] of [["i18nPlaceholder", "placeholder"], ["i18nTitle", "title"], ["i18nAriaLabel", "aria-label"]]) {
+    const selector = `[data-${attr.replace(/[A-Z]/g, (c) => `-${c.toLowerCase()}`)}]`;
+    for (const node of root.querySelectorAll(selector)) node.setAttribute(name, t(node.dataset[attr]));
+  }
+}
+
+PD.i18n = { LANGUAGES, resolveLanguage, setLanguage, language, locale, t, localized, addMessages, applyI18n };
+})();
+</script>

@@ -1,0 +1,167 @@
+<style>
+/*
+ * tokens.css — デザイントークン（見た目の「変数」）
+ *
+ * 見た目を変えたいときは、まずここの値を変えてください。
+ * 他の CSS はすべてこの変数を参照しているので、ここだけで
+ * 色・フォント・背景・カードの形・影・見出しの文字組みなどが変わります。
+ * テーマ（themes.css）も、この変数を上書きしているだけです。
+ *
+ * 色は light-dark(ライト時の値, ダーク時の値) で一度に指定します。
+ * 配色モード（自動 / ライト / ダーク）は <html data-mode="..."> で切り替わります。
+ *
+ * レイヤーの優先順位（後ろほど強い）:
+ *   tokens < base < layout < components < themes < custom
+ */
+@layer tokens, base, layout, components, themes, custom;
+
+@layer tokens {
+  /*
+   * [data-preset] も対象にしているのは、設定画面のテーマ見本を
+   * 標準値から描き始めるため（見本ごとに data-preset が付いています）。
+   */
+  :root,
+  [data-preset] {
+    color-scheme: light dark;
+
+    /* ---------- 色 ---------- */
+    --color-bg:             light-dark(#f4f3ef, #141517);
+    --color-surface:        light-dark(#ffffff, #1e2023);
+    --color-surface-muted:  light-dark(#f0eee9, #26292d);
+    --color-surface-hover:  light-dark(#ebe9e3, #2c2f34);
+    --color-border:         light-dark(#e2dfd8, #33363b);
+    --color-text:           light-dark(#22231f, #e8e6e1);
+    --color-text-muted:     light-dark(#6b6a63, #9d9b95);
+    --color-accent:         light-dark(#2f6f5e, #6fc2a8);
+    --color-accent-contrast: light-dark(#ffffff, #10231d);
+    --color-danger:         light-dark(#b3261e, #f2847c);
+    --color-focus:          var(--color-accent);
+    --color-backdrop:       rgb(0 0 0 / 0.4);
+
+    /* ---------- 文字 ---------- */
+    /*
+     * 各 OS の標準フォント（システムフォント）を使います。
+     *   macOS / iOS : San Francisco + ヒラギノ角ゴシック
+     *   Windows     : Segoe UI + Yu Gothic UI（OS の設定による）
+     *   Android     : Roboto + Noto Sans CJK
+     * system-ui に対応していない古いブラウザ向けに、各 OS の名前も続けて書いています。
+     */
+    --font-sans: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+                 "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic UI", Meiryo,
+                 Roboto, "Noto Sans JP", sans-serif;
+    --font-serif: "Hiragino Mincho ProN", "Yu Mincho", YuMincho, "Noto Serif JP", serif;
+    --font-mono: ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
+    --font-heading: var(--font-sans);      /* 見出し（ダッシュボード名・ウィジェット名） */
+    --font-size-xs: 0.75rem;
+    --font-size-sm: 0.8125rem;
+    --font-size-md: 0.9375rem;
+    --font-size-lg: 1.125rem;
+    --font-size-xl: 1.375rem;
+    --font-size-clock: 2.5rem;
+    --line-height: 1.6;
+    --font-weight-bold: 600;
+
+    /* ---------- 余白 ---------- */
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 24px;
+    --space-6: 32px;
+
+    /* ---------- 形 ---------- */
+    --radius-sm: 6px;
+    --radius-md: 10px;
+    --radius-lg: 14px;
+    --border-width: 1px;
+    --shadow-widget: 0 1px 2px light-dark(rgb(0 0 0 / 0.05), rgb(0 0 0 / 0.3));
+    --shadow-raised: 0 8px 24px light-dark(rgb(0 0 0 / 0.12), rgb(0 0 0 / 0.5));
+
+    /* ---------- ページ ---------- */
+    --page-bg: var(--color-bg);            /* グラデーションや画像も指定できます */
+    --header-bg: color-mix(in srgb, var(--color-bg) 82%, transparent);
+    --header-border: none;
+
+    /* ---------- ダッシュボード名 ---------- */
+    --app-title-font: var(--font-heading);
+    --app-title-size: var(--font-size-xl);
+    --app-title-weight: var(--font-weight-bold);
+    --app-title-spacing: 0.01em;
+    --app-title-transform: none;
+    --app-title-color: var(--color-text);
+    --app-title-fill: none;                /* グラデーション文字にするときは背景を指定し、color を transparent に */
+
+    /* ---------- ウィジェット（カード） ---------- */
+    --widget-bg: var(--color-surface);
+    --widget-border: var(--border-width) solid var(--color-border);
+    --widget-radius: var(--radius-lg);
+    --widget-shadow: var(--shadow-widget);
+    --widget-shadow-hover: var(--widget-shadow);
+    --widget-hover-translate: none;        /* 例: -2px -2px で浮き上がる */
+    --widget-backdrop: none;               /* 例: blur(16px) ですりガラス */
+    --widget-header-border: none;          /* 見出しの下線 */
+    --widget-title-font: var(--font-heading);
+    --widget-title-size: var(--font-size-md);
+    --widget-title-weight: var(--font-weight-bold);
+    --widget-title-spacing: normal;
+    --widget-title-transform: none;
+    --widget-title-color: var(--color-text);
+    --widget-title-prefix: "";             /* 見出しの前に付ける文字。例: "> " */
+
+    /* ---------- リンク・部品 ---------- */
+    --link-radius: var(--radius-sm);
+    --link-hover-bg: var(--color-surface-hover);
+    --link-hover-color: var(--color-text);
+    --tile-bg: var(--color-surface-muted);
+    --tile-border: none;
+    --button-radius: var(--radius-sm);
+    --button-shadow: none;
+    --input-bg: var(--color-surface);
+    --search-radius: 999px;
+    --note-bg: var(--color-surface-muted);
+    --clock-font: var(--font-mono);
+    --clock-weight: 400;
+    --clock-color: var(--color-text);
+    --clock-glow: none;                    /* 時計の文字の光彩（text-shadow） */
+
+    /* ---------- レイアウト ---------- */
+    --page-max-width: 1440px;
+    --footer-height: 40px;               /* 画面下に固定したフッターの高さ */
+    --page-gutter: var(--space-5);       /* 画面端の余白 */
+    --grid-columns: 4;                   /* 広い画面での列数 */
+    --grid-gap: var(--space-4);
+    --grid-row-height: 150px;            /* タイル表示の 1 段の高さ */
+    --widget-padding: var(--space-4);
+    --link-tile-min: 92px;               /* タイル表示のリンク 1 個の最小幅 */
+    --icon-size: 20px;
+    --icon-size-tile: 32px;
+
+    /* ---------- 動き ---------- */
+    --transition-fast: 120ms ease;
+  }
+
+  /* 配色モードを固定する（設定画面から切り替え） */
+  :root[data-mode="light"] { color-scheme: light; }
+  :root[data-mode="dark"]  { color-scheme: dark; }
+
+  /* 狭い画面での調整 */
+  @media (max-width: 640px) {
+    :root {
+      --page-gutter: var(--space-4);
+      --grid-gap: var(--space-3);
+      --widget-padding: var(--space-3);
+    }
+  }
+
+  /* 表示密度「コンパクト」（設定画面から切り替え） */
+  :root[data-density="compact"] {
+    --grid-row-height: 140px;
+    --font-size-md: 0.875rem;
+    --widget-padding: var(--space-3);
+    --grid-gap: var(--space-2);
+    --icon-size: 16px;
+    --icon-size-tile: 24px;
+    --link-tile-min: 76px;
+  }
+}
+</style>

@@ -1,0 +1,49 @@
+<style>
+/*
+ * base.css — リセットと文字の基本設定
+ * 値はすべて tokens.css の変数を使っています。
+ */
+@layer base {
+  *, *::before, *::after { box-sizing: border-box; }
+
+  html {
+    -webkit-text-size-adjust: 100%;
+    text-size-adjust: 100%;
+  }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    background: var(--page-bg);
+    background-attachment: fixed;
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: var(--font-size-md);
+    line-height: var(--line-height);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1, h2, h3, p { margin: 0; }
+
+  a { color: inherit; }
+
+  button, input, select, textarea {
+    font: inherit;
+    color: inherit;
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-focus);
+    outline-offset: 2px;
+  }
+
+  [hidden] { display: none !important; }
+
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      transition: none !important;
+      animation: none !important;
+    }
+  }
+}
+</style>

@@ -1,0 +1,461 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="robots" content="noindex, nofollow">
+  <title>Dashboard</title>
+  <base target="_top">
+
+  <?!= include_('css_tokens'); ?>
+  <?!= include_('css_base'); ?>
+  <?!= include_('css_layout'); ?>
+  <?!= include_('css_components'); ?>
+  <?!= include_('css_themes'); ?>
+  <?!= include_('css_org'); ?>
+  <?!= include_('css_custom'); ?>
+</head>
+<!--
+  画面の文言は js/locales/<言語>.js にあります。
+  data-i18n="キー" を付けた要素の文字、data-i18n-placeholder / -title / -aria-label を付けた属性は、
+  選んだ言語の文言に置き換わります（js/i18n.js）。
+-->
+<body>
+  <header class="app-header">
+    <div class="app-header__inner">
+      <h1 class="app-header__title" id="dashboard-title">Dashboard</h1>
+
+      <div class="app-header__search" id="header-search" hidden>
+        <input type="search" id="filter" class="input input--search"
+               data-i18n-placeholder="header.filter" data-i18n-aria-label="header.filterLabel" autocomplete="off">
+      </div>
+
+      <div class="app-header__actions">
+        <div class="app-header__actions" id="header-actions" hidden>
+          <span class="save-status" id="save-status" role="status" aria-live="polite"></span>
+          <button type="button" class="button" id="edit-toggle" aria-pressed="false">
+            <span class="button__icon" aria-hidden="true">✎</span><span class="button__label" data-i18n="common.edit"></span>
+          </button>
+          <button type="button" class="button button--icon" id="settings-open" data-i18n-aria-label="header.settings" data-i18n-title="header.settings">⚙</button>
+        </div>
+        <!-- ライト / ダークの切り替え（D キーでも切り替わる）。ログイン前も使える -->
+        <button type="button" class="button button--icon" id="mode-toggle" data-i18n-aria-label="header.toggleMode" data-i18n-title="header.toggleMode">☾</button>
+      </div>
+    </div>
+  </header>
+
+  <div class="banner" id="banner" hidden></div>
+
+  <!-- 未読の「重要」なお知らせ -->
+  <div class="notice-bar" id="notice-bar" hidden></div>
+
+  <!-- タブ（タブが 2 つ以上あるとき、または編集中に表示） -->
+  <nav class="tabs" id="tabs" hidden></nav>
+
+  <!-- ログイン画面（Firebase の設定が済んでいて、ログインしていないとき） -->
+  <section class="signin" id="signin" hidden>
+    <div class="signin__card">
+      <h2 class="signin__title" data-i18n="signin.title"></h2>
+      <p class="signin__text" data-i18n="signin.text"></p>
+      <button type="button" class="button button--primary button--large" id="signin-button" data-i18n="signin.button"></button>
+    </div>
+  </section>
+
+  <main class="dashboard" id="dashboard" aria-live="polite"></main>
+
+  <!-- フッター（画面のいちばん下に固定） -->
+  <footer class="app-footer">
+    <div class="app-footer__inner">
+      <a class="app-footer__link" href="https://github.com/kwaka1208/gws-team-dashboard" target="_blank" rel="noopener noreferrer"
+         data-i18n-title="footer.repo" data-i18n-aria-label="footer.repoLabel">
+        <svg class="app-footer__icon" viewBox="0 0 16 16" width="16" height="16" aria-hidden="true">
+          <path fill="currentColor" d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z"/>
+        </svg>
+      </a>
+      <span class="app-footer__version" data-i18n-title="footer.beta">v0.1</span>
+      <span class="app-footer__spacer"></span>
+      <span class="app-footer__shared" id="shared-badge" data-i18n="footer.shared" data-i18n-title="footer.sharedTitle" hidden></span>
+      <span id="user-email"></span>
+      <button type="button" class="button button--small button--ghost" id="signout-button" data-i18n="footer.signout" hidden></button>
+    </div>
+  </footer>
+
+  <!-- ウィジェットの追加・編集 -->
+  <dialog class="dialog" id="widget-dialog">
+    <form method="dialog" class="dialog__body" id="widget-form">
+      <h2 class="dialog__title" id="widget-dialog-title" data-i18n="dialog.widget"></h2>
+
+      <label class="field">
+        <span class="field__label" data-i18n="dialog.type"></span>
+        <select class="input" name="type">
+          <option value="notice" data-i18n="widget.notice"></option>
+          <option value="links" data-i18n="widget.links"></option>
+          <option value="note" data-i18n="widget.note"></option>
+          <option value="clock" data-i18n="widget.clock"></option>
+          <option value="search" data-i18n="widget.search"></option>
+          <option value="embed" data-i18n="typeOption.embed"></option>
+          <option value="todo" data-i18n="typeOption.todo"></option>
+          <option value="photo" data-i18n="typeOption.photo"></option>
+          <option value="calendar" data-i18n="typeOption.calendar"></option>
+          <option value="mail" data-i18n="typeOption.mail"></option>
+          <option value="weather" data-i18n="widget.weather"></option>
+          <option value="timer" data-i18n="widget.timer"></option>
+          <option value="worldclock" data-i18n="widget.worldclock"></option>
+          <option value="habit" data-i18n="widget.habit"></option>
+          <option value="github" data-i18n="typeOption.github"></option>
+          <option value="yamato" data-i18n="typeOption.yamato"></option>
+        </select>
+      </label>
+
+      <label class="field">
+        <span class="field__label" data-i18n="dialog.title"></span>
+        <input class="input" name="title" maxlength="80">
+      </label>
+
+      <label class="field">
+        <span class="field__label" data-i18n="dialog.size"></span>
+        <select class="input" name="size">
+          <option value="s" data-i18n="dialog.sizeS"></option>
+          <option value="m" data-i18n="dialog.sizeM"></option>
+          <option value="l" data-i18n="dialog.sizeL"></option>
+          <option value="xl" data-i18n="dialog.sizeXL"></option>
+        </select>
+      </label>
+
+      <label class="field" id="widget-page-field">
+        <span class="field__label" data-i18n="dialog.page"></span>
+        <select class="input" name="page"></select>
+      </label>
+
+      <label class="field">
+        <span class="field__label" data-i18n="dialog.rows"></span>
+        <select class="input" name="rows">
+          <option value="1" data-i18n="dialog.rows1"></option>
+          <option value="2" data-i18n="dialog.rows2"></option>
+          <option value="3" data-i18n="dialog.rows3"></option>
+          <option value="4" data-i18n="dialog.rows4"></option>
+        </select>
+        <span class="field__hint" id="size-hint" hidden></span>
+      </label>
+
+      <label class="field">
+        <span class="field__label" data-i18n="dialog.accent"></span>
+        <span class="field__row">
+          <input class="input input--color" type="color" name="accent">
+          <label class="checkbox"><input type="checkbox" name="useAccent"> <span data-i18n="dialog.useAccent"></span></label>
+        </span>
+      </label>
+
+      <label class="field" data-for-type="notice">
+        <span class="field__label" data-i18n="notice.scope"></span>
+        <!-- 選択肢は、見られる組織から自動で作る（app.js の WIDGET_FORMS.notice） -->
+        <select class="input" name="noticeScope"></select>
+      </label>
+
+      <label class="field" data-for-type="links">
+        <span class="field__label" data-i18n="dialog.linksView"></span>
+        <select class="input" name="view">
+          <option value="list" data-i18n="dialog.viewList"></option>
+          <option value="grid" data-i18n="dialog.viewGrid"></option>
+        </select>
+      </label>
+
+      <label class="field" data-for-type="search">
+        <span class="field__label" data-i18n="dialog.searchUrl"></span>
+        <input class="input" name="searchUrl" placeholder="https://www.google.com/search?q=%s">
+      </label>
+
+      <label class="field" data-for-type="embed">
+        <span class="field__label" data-i18n="dialog.embedUrl"></span>
+        <input class="input" name="embedUrl" type="url" placeholder="https://www.youtube.com/watch?v=...">
+        <span class="field__hint" id="embed-url-hint" data-i18n="dialog.embedYouTube" hidden></span>
+      </label>
+      <label class="field" data-for-type="embed" id="embed-height-field">
+        <span class="field__label" data-i18n="dialog.embedHeight"></span>
+        <input class="input" name="height" type="number" min="120" max="1600" step="10">
+      </label>
+
+      <label class="field" data-for-type="calendar">
+        <span class="field__label" data-i18n="dialog.calendarDays"></span>
+        <select class="input" name="calendarDays">
+          <option value="1" data-i18n="dialog.calendarDays1"></option>
+          <option value="3" data-i18n="dialog.calendarDays3"></option>
+          <option value="7" data-i18n="dialog.calendarDays7"></option>
+          <option value="14" data-i18n="dialog.calendarDays14"></option>
+        </select>
+      </label>
+      <label class="checkbox" data-for-type="calendar">
+        <input type="checkbox" name="allCalendars"> <span data-i18n="dialog.allCalendars"></span>
+      </label>
+
+      <label class="field" data-for-type="mail">
+        <span class="field__label" data-i18n="dialog.mailLabel"></span>
+        <select class="input" name="mailLabel">
+          <option value="INBOX" data-i18n="dialog.mailInbox"></option>
+          <option value="CATEGORY_PERSONAL" data-i18n="dialog.mailPersonal"></option>
+          <option value="IMPORTANT" data-i18n="dialog.mailImportant"></option>
+          <option value="STARRED" data-i18n="dialog.mailStarred"></option>
+        </select>
+      </label>
+
+      <!-- 天気 -->
+      <label class="field" data-for-type="weather">
+        <span class="field__label" data-i18n="dialog.weatherPlace"></span>
+        <span class="field__row">
+          <input class="input" name="weatherPlace" style="flex: 1; width: auto;" data-i18n-placeholder="dialog.weatherPlaceholder">
+          <button type="button" class="button" id="weather-here" data-i18n="dialog.weatherHere"></button>
+        </span>
+        <input type="hidden" name="weatherLat">
+        <input type="hidden" name="weatherLon">
+      </label>
+
+      <!-- タイマー・ポモドーロ -->
+      <label class="field" data-for-type="timer">
+        <span class="field__label" data-i18n="dialog.timerMode"></span>
+        <select class="input" name="timerMode">
+          <option value="pomodoro" data-i18n="dialog.timerPomodoro"></option>
+          <option value="timer" data-i18n="dialog.timerTimer"></option>
+        </select>
+      </label>
+      <div class="field" data-for-type="timer">
+        <span class="field__label" data-i18n="dialog.timerMinutes"></span>
+        <span class="field__row timer-fields">
+          <label data-timer-mode="pomodoro"><span data-i18n="dialog.timerWork"></span> <input class="input input--number" type="number" name="timerWork" min="1" max="180"></label>
+          <label data-timer-mode="pomodoro"><span data-i18n="dialog.timerShort"></span> <input class="input input--number" type="number" name="timerShort" min="1" max="60"></label>
+          <label data-timer-mode="pomodoro"><span data-i18n="dialog.timerLong"></span> <input class="input input--number" type="number" name="timerLong" min="1" max="120"></label>
+          <label data-timer-mode="pomodoro"><span data-i18n="dialog.timerLongEvery"></span> <input class="input input--number" type="number" name="timerLongEvery" min="2" max="8"></label>
+          <label data-timer-mode="timer"><span data-i18n="dialog.timerTimerMinutes"></span> <input class="input input--number" type="number" name="timerMinutes" min="1" max="600"></label>
+        </span>
+      </div>
+      <label class="checkbox" data-for-type="timer">
+        <input type="checkbox" name="timerAutoNext"> <span data-i18n="dialog.timerAutoNext"></span>
+      </label>
+      <label class="checkbox" data-for-type="timer">
+        <input type="checkbox" name="timerSound"> <span data-i18n="dialog.timerSound"></span>
+      </label>
+
+      <!-- 世界時計 -->
+      <div class="field" data-for-type="worldclock">
+        <span class="field__label" data-i18n="dialog.zones"></span>
+        <ul class="zone-list" id="world-zone-list"></ul>
+        <div class="field__row">
+          <button type="button" class="button button--small" id="world-zone-add" data-i18n="dialog.zoneAdd"></button>
+        </div>
+        <span class="field__hint" data-i18n="dialog.zoneHint"></span>
+      </div>
+
+      <!-- 習慣トラッカー -->
+      <label class="field" data-for-type="habit">
+        <span class="field__label" data-i18n="dialog.habitDays"></span>
+        <select class="input" name="habitDays">
+          <option value="7" data-i18n="dialog.habitDays7"></option>
+          <option value="14" data-i18n="dialog.habitDays14"></option>
+        </select>
+      </label>
+
+      <!-- GitHub -->
+      <fieldset class="fieldset" data-for-type="github">
+        <legend class="field__label" data-i18n="dialog.githubLists"></legend>
+        <label class="checkbox"><input type="checkbox" name="githubLists" value="review"> <span data-i18n="dialog.githubReview"></span></label>
+        <label class="checkbox"><input type="checkbox" name="githubLists" value="mine"> <span data-i18n="dialog.githubMine"></span></label>
+        <label class="checkbox"><input type="checkbox" name="githubLists" value="assigned"> <span data-i18n="dialog.githubAssigned"></span></label>
+      </fieldset>
+      <label class="field" data-for-type="github">
+        <span class="field__label" data-i18n="dialog.githubLimit"></span>
+        <select class="input" name="githubLimit">
+          <option value="5" data-i18n="dialog.githubLimit5"></option>
+          <option value="10" data-i18n="dialog.githubLimit10"></option>
+          <option value="20" data-i18n="dialog.githubLimit20"></option>
+        </select>
+      </label>
+      <div class="field" data-for-type="github">
+        <span class="field__hint" id="github-token-state"></span>
+        <span class="field__row">
+          <button type="button" class="button button--small button--danger" id="github-token-clear" data-i18n="dialog.githubTokenClear"></button>
+        </span>
+      </div>
+
+      <label class="checkbox" data-for-type="note">
+        <input type="checkbox" name="noteMarkdown"> <span data-i18n="dialog.noteMarkdown"></span>
+      </label>
+
+      <label class="field" data-for-type="photo">
+        <span class="field__label" data-i18n="dialog.photoFit"></span>
+        <select class="input" name="photoFit">
+          <option value="cover" data-i18n="dialog.photoCover"></option>
+          <option value="contain" data-i18n="dialog.photoContain"></option>
+        </select>
+      </label>
+      <label class="field" data-for-type="photo">
+        <span class="field__label" data-i18n="dialog.photoInterval"></span>
+        <select class="input" name="photoInterval">
+          <option value="0" data-i18n="dialog.photoInterval0"></option>
+          <option value="5" data-i18n="dialog.photoInterval5"></option>
+          <option value="10" data-i18n="dialog.photoInterval10"></option>
+          <option value="30" data-i18n="dialog.photoInterval30"></option>
+          <option value="60" data-i18n="dialog.photoInterval60"></option>
+          <option value="300" data-i18n="dialog.photoInterval300"></option>
+        </select>
+      </label>
+
+      <label class="field" data-for-type="clock">
+        <span class="field__label" data-i18n="dialog.timeZone"></span>
+        <select class="input" name="timeZone" id="clock-time-zone"></select>
+      </label>
+
+      <!-- アドオン（自作ウィジェット）の設定欄。public/addons/ で登録したものが、ここに自動で入る -->
+      <div id="addon-fields" class="dialog__addon-fields"></div>
+
+      <div class="dialog__actions">
+        <button type="button" class="button button--danger" id="widget-delete" data-i18n="common.delete"></button>
+        <span class="dialog__spacer"></span>
+        <button value="cancel" class="button" formnovalidate data-i18n="common.cancel"></button>
+        <button value="ok" class="button button--primary" data-i18n="common.save"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- リンクの追加・編集 -->
+  <dialog class="dialog" id="link-dialog">
+    <form method="dialog" class="dialog__body" id="link-form">
+      <h2 class="dialog__title" id="link-dialog-title" data-i18n="link.dialog"></h2>
+
+      <label class="field">
+        <span class="field__label" data-i18n="link.url"></span>
+        <input class="input" name="url" type="url" required placeholder="https://">
+      </label>
+      <label class="field">
+        <span class="field__label" data-i18n="link.title"></span>
+        <input class="input" name="title" maxlength="80" data-i18n-placeholder="link.titlePlaceholder">
+      </label>
+      <label class="field">
+        <span class="field__label" data-i18n="link.icon"></span>
+        <input class="input" name="icon" maxlength="300">
+      </label>
+      <label class="field">
+        <span class="field__label" data-i18n="link.description"></span>
+        <input class="input" name="description" maxlength="200">
+      </label>
+
+      <div class="dialog__actions">
+        <button type="button" class="button button--danger" id="link-delete" data-i18n="common.delete"></button>
+        <span class="dialog__spacer"></span>
+        <button value="cancel" class="button" formnovalidate data-i18n="common.cancel"></button>
+        <button value="ok" class="button button--primary" data-i18n="common.save"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 1 行の文字入力（ToDo やカテゴリーの名前など） -->
+  <dialog class="dialog" id="text-dialog">
+    <form method="dialog" class="dialog__body" id="text-form">
+      <h2 class="dialog__title" id="text-dialog-title"></h2>
+      <label class="field">
+        <span class="field__label" id="text-dialog-label"></span>
+        <input class="input" name="text" maxlength="200" required>
+      </label>
+      <div class="dialog__actions">
+        <span class="dialog__spacer"></span>
+        <button value="cancel" class="button" formnovalidate data-i18n="common.cancel"></button>
+        <button value="ok" class="button button--primary" data-i18n="common.save"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <!-- 一時的なお知らせ -->
+  <div class="toast" id="toast" role="status" aria-live="polite" hidden></div>
+
+  <!-- 設定 -->
+  <dialog class="dialog dialog--wide" id="settings-dialog">
+    <form method="dialog" class="dialog__body" id="settings-form">
+      <h2 class="dialog__title" data-i18n="settings.title"></h2>
+
+      <label class="field">
+        <span class="field__label" data-i18n="settings.name"></span>
+        <input class="input" name="title" maxlength="80">
+      </label>
+      <label class="field">
+        <span class="field__label" data-i18n="settings.language"></span>
+        <!-- 言語の選択肢は js/i18n.js の LANGUAGES から自動で足す -->
+        <select class="input" name="language">
+          <option value="auto" data-i18n="settings.languageAuto"></option>
+        </select>
+        <span class="field__hint" data-personal-hint data-i18n="settings.personalHint" hidden></span>
+      </label>
+      <label class="field">
+        <span class="field__label" data-i18n="settings.mode"></span>
+        <select class="input" name="mode">
+          <option value="auto" data-i18n="settings.modeAuto"></option>
+          <option value="light" data-i18n="settings.modeLight"></option>
+          <option value="dark" data-i18n="settings.modeDark"></option>
+        </select>
+        <span class="field__hint" data-personal-hint data-i18n="settings.personalHint" hidden></span>
+      </label>
+      <fieldset class="fieldset fieldset--plain">
+        <legend class="field__label" data-i18n="settings.theme"></legend>
+        <div class="theme-picker" id="theme-picker"></div>
+      </fieldset>
+      <label class="field">
+        <span class="field__label" data-i18n="settings.density"></span>
+        <select class="input" name="density">
+          <option value="normal" data-i18n="settings.densityNormal"></option>
+          <option value="compact" data-i18n="settings.densityCompact"></option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field__label" data-i18n="settings.layout"></span>
+        <select class="input" name="layout">
+          <option value="tile" data-i18n="settings.layoutTile"></option>
+          <option value="flow" data-i18n="settings.layoutFlow"></option>
+        </select>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" name="openInNewTab"> <span data-i18n="settings.openInNewTab"></span>
+      </label>
+      <label class="checkbox">
+        <input type="checkbox" name="useFavicons"> <span data-i18n="settings.useFavicons"></span>
+      </label>
+      <label class="checkbox" hidden>
+        <input type="checkbox" name="autoRenewGoogle"> <span data-i18n="settings.autoRenewGoogle"></span>
+      </label>
+      <span class="field__hint" data-personal-hint data-i18n="settings.personalHint" hidden></span>
+
+      <fieldset class="fieldset">
+        <legend class="field__label" data-i18n="settings.backup"></legend>
+        <div class="field__row">
+          <button type="button" class="button" id="export-button" data-i18n="settings.export"></button>
+          <label class="button">
+            <span data-i18n="settings.import"></span><input type="file" accept="application/json,.json" id="import-input" hidden>
+          </label>
+          <button type="button" class="button button--danger" id="reset-button" data-i18n="settings.reset"></button>
+        </div>
+      </fieldset>
+
+      <div class="dialog__actions">
+        <span class="dialog__spacer"></span>
+        <button value="cancel" class="button" formnovalidate data-i18n="common.cancel"></button>
+        <button value="ok" class="button button--primary" data-i18n="common.save"></button>
+      </div>
+    </form>
+  </dialog>
+
+  <script>
+    /* サーバー（doGet）が埋め込んだ、最初の表示に使うデータ */
+    window.PD = {};
+    window.__BOOT__ = <?!= bootJson ?>;
+  </script>
+  <?!= include_('vendor_sortable'); ?>
+  <?!= include_('vendor_marked'); ?>
+  <?!= include_('vendor_purify'); ?>
+  <?!= include_('js_config'); ?>
+  <?!= include_('js_locale_ja'); ?>
+  <?!= include_('js_locale_en'); ?>
+  <?!= include_('js_i18n'); ?>
+  <?!= include_('js_embed'); ?>
+  <?!= include_('js_storage'); ?>
+  <?!= include_('js_google'); ?>
+  <?!= include_('js_services'); ?>
+  <?!= include_('js_addon_api'); ?>
+  <?!= include_('js_addons'); ?>
+  <?!= include_('js_app'); ?>
+</body>
+</html>
