@@ -16,6 +16,8 @@ html = html.replace(/<\?!= include_\('(\w+)'\); \?>/g, (_, name) => fs.readFileS
 html = html.replace("<?!= bootJson ?>", "null");
 const version = (fs.readFileSync(path.join(src, "config.js"), "utf8").match(/const APP_VERSION = "([^"]*)"/) || [])[1] || "";
 html = html.replace("<?= APP_VERSION ?>", version);
+const title = (fs.readFileSync(path.join(src, "config.js"), "utf8").match(/title: '([^']*)'/) || [])[1] || "";
+html = html.replace("<?= APP.title ?>", title);
 // Apps Script と同じように、<script> のコメントを消してから書き出す（同じ壊れ方を手元でも再現するため）
 html = stripScripts(html);
 const mock = fs.readFileSync(path.join(root, "dev", "mock.js"), "utf8");

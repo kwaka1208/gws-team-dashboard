@@ -773,8 +773,10 @@ function applySettings(settings = state.settings) {
   if (density === "compact") el.root.dataset.density = density;
   else delete el.root.dataset.density;
   if (state) {
-    el.title.textContent = state.title || "Dashboard";
-    document.title = state.title || "Dashboard";
+    // 画面の名前は全員共通（src/config.js の APP.title）。個人の設定にはしない
+    const appTitle = storage.appTitle() || state.title || "Dashboard";
+    el.title.textContent = appTitle;
+    document.title = appTitle;
   }
   updateModeToggle(settings);
 }
@@ -4212,7 +4214,7 @@ function showSignedOut() {
   el.headerActions.hidden = true;
   el.userEmail.textContent = "";
   el.signoutButton.hidden = true;
-  el.title.textContent = "Dashboard";
+  el.title.textContent = storage.appTitle() || "Dashboard";
   document.title = "Dashboard";
 }
 

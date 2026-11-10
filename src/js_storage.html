@@ -120,6 +120,11 @@ async function connectGoogle() { return "apps-script"; }
 /** 見られる組織 [{ id, name, kind, canEdit }]（全社 → 部署の順） */
 let units = [];
 
+/** 画面の名前（src/config.js の APP.title。サーバーが最初の表示に埋め込む） */
+function appTitle() {
+  return (boot?.ok && boot.data.title) || "";
+}
+
 function unitList() {
   return units;
 }
@@ -477,7 +482,7 @@ PD.storage = {
   readPersonal, writePersonal, readAppearance, writeAppearance,
   initFirebase, watchUser, signIn, signOut,
   canUseGoogleApi, getGoogleToken, getGoogleConnection, forgetGoogleToken, connectGoogle,
-  unitList, unitById, canEditUnit,
+  appTitle, unitList, unitById, canEditUnit,
   loadDefault, load, setBase, save, watch, fetchLatest, stopWatching,
   getNotices, isNoticeRead, onNoticesChanged, markNoticesRead, postNotice, deleteNotice,
 };

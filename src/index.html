@@ -22,7 +22,7 @@
 <body>
   <header class="app-header">
     <div class="app-header__inner">
-      <h1 class="app-header__title" id="dashboard-title">Dashboard</h1>
+      <h1 class="app-header__title" id="dashboard-title"><?= APP.title ?></h1>
 
       <div class="app-header__search" id="header-search" hidden>
         <input type="search" id="filter" class="input input--search"
@@ -389,7 +389,8 @@
     <form method="dialog" class="dialog__body" id="settings-form">
       <h2 class="dialog__title" data-i18n="settings.title"></h2>
 
-      <label class="field">
+      <!-- 画面の名前は src/config.js の APP.title で決める（全員共通）。個人版の「名前」欄は使わない -->
+      <label class="field" hidden>
         <span class="field__label" data-i18n="settings.name"></span>
         <input class="input" name="title" maxlength="80">
       </label>
